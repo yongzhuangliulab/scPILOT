@@ -43,7 +43,7 @@ python setup.py develop
 The datasets used in this work can be downloaded from https://zenodo.org/records/15462933.
 
 ## Experiments
-After downloading the datasets, the results of scPILOT, scGen, VAEGAN, and identity can be reproduced with the scripts we provide. The results of CellOT and biolord need adaptation according to their requirements and our experiment settings.
+After downloading the datasets, the results of scPILOT, scGen, VAEGAN, and identity can be reproduced with the scripts we provide. The results of CellOT and biolord need adaptation according to their requirements and our experiment settings. We provide the relevant files and they need to be manually replaced.
 
 ## Contact
 In case you have questions, please contact Jialiang Wang through 18846091447@163.com.
