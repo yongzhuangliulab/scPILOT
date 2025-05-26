@@ -1,0 +1,15 @@
+data:
+  type: cell
+  source: control
+  target: stimulated
+  condition: condition
+
+dataloader:
+  batch_size: 64
+  shuffle: true
+
+datasplit:
+  groupby: condition
+  name: toggle_ood
+  test_size: 0.2
+  random_state: 0

@@ -1,0 +1,15 @@
+data:
+  type: cell
+  source: control
+  condition: drug
+
+dataloader:
+  batch_size: 256
+  shuffle: true
+
+datasplit:
+  key: cell_type
+  groupby: ['cell_type', 'drug']
+  name: toggle_ood
+  test_size: 0.2
+  random_state: 0
