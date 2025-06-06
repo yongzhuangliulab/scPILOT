@@ -101,7 +101,7 @@ class MLP(torch.nn.Module):
                             for slice_x in x:
                                 if slice_x.shape[0] == 1:
                                     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                                    layer_slice_x = torch.zeros(layer_slice_x.shape).to(device)
+                                    layer_slice_x = torch.zeros(slice_x.shape).to(device)
                                 else:
                                     layer_slice_x = layer(slice_x)
                                 layer_slice_x_list.append(layer_slice_x.unsqueeze(0))
