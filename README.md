@@ -39,7 +39,7 @@ python setup.py develop
 ```
 
 ## Datasets
-The datasets used in this work can be downloaded from .
+The datasets used in this work can be downloaded from https://zenodo.org/records/17827106.
 
 ## Reproducibility
 The results can be reproduced with the datasets and scripts we provide.
