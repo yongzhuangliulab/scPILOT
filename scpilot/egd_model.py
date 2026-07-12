@@ -11,11 +11,27 @@ from torch.utils.data import DataLoader
 from adjustText import adjust_text
 from anndata import AnnData
 from scipy import stats
+from scipy.spatial.distance import cdist
 from matplotlib import pyplot as plt
 from .egd_network import EGD_network
 from .egd_training_plan import EGDTrainingPlan
 from .ann_data_splitter import AnnDataSplitter, AnnDataset
 from .egd_train_runner import  EGDTrainRunner
+def save_figure_jpg_pdf(path_to_save: str, dpi: int = 300, bbox_inches: str = 'tight'):
+    """
+    Save the current matplotlib figure as both JPG and PDF.
+
+    The input path can end with .jpg, .jpeg, .pdf, or any suffix.
+    The function will save both:
+        <base>.jpg
+        <base>.pdf
+    """
+    root, _ = os.path.splitext(path_to_save)
+    jpg_path = root + '.jpg'
+    pdf_path = root + '.pdf'
+
+    plt.savefig(jpg_path, dpi=dpi, bbox_inches=bbox_inches)
+    plt.savefig(pdf_path, bbox_inches=bbox_inches)
 def balancer(
     adata: AnnData,
     cell_label_key: str,
@@ -58,12 +74,16 @@ def extractor(
 def ot_naive(
     z1: np.ndarray,
     z2: np.ndarray,
+    numItermax: int = 1000000,
 ):
     dis_mtx = ot.dist(z1, z2) + 1e-6
+    a = ot.utils.unif(z1.shape[0])
+    b = ot.utils.unif(z2.shape[0])
+
     return ot.emd(
-        ot.utils.unif(z1.shape[0]), ot.utils.unif(z2.shape[0]), dis_mtx
+        a, b, dis_mtx, numItermax=numItermax
     ), ot.emd2(
-        ot.utils.unif(z1.shape[0]), ot.utils.unif(z2.shape[0]), dis_mtx
+        a, b, dis_mtx, numItermax=numItermax
     )
 class EGD_model:
     def to_device(self, device: Union[str, int]):
@@ -392,7 +412,8 @@ class EGD_model:
         save = True,
         gene_list: Optional[list] = None,
         show = False,
-        top_100_genes = None,
+        top_genes = None,
+        top_gene_label: str = 'T50',
         verbose = False,
         legend = True,
         title: Optional[str] = None,
@@ -402,7 +423,7 @@ class EGD_model:
         **kwargs,
     ):
         import seaborn as sns
-        diff_genes = top_100_genes
+        diff_genes = top_genes
         stim = adata[adata.obs[cond_key] == axis_keys['y']]
         pred = adata[adata.obs[cond_key] == axis_keys['x']]
         if diff_genes is not None:
@@ -415,7 +436,7 @@ class EGD_model:
             y_diff: np.ndarray = np.asarray(np.mean(stim_diff.X.toarray(), axis=0)).ravel()
             _, _, r_value_diff, _, _ = stats.linregress(x_diff, y_diff)
             if verbose:
-                print('Top 100 DEGs mean: ', r_value_diff**2)
+                print(f'{top_gene_label} DEGs mean: ', r_value_diff**2)
         x: np.ndarray = np.asarray(np.mean(pred.X.toarray(), axis=0)).ravel()
         y: np.ndarray = np.asarray(np.mean(stim.X.toarray(), axis=0)).ravel()
         _, _, r_value, _, _ = stats.linregress(x, y)
@@ -462,12 +483,12 @@ class EGD_model:
             ax.text(
                 max(x) - max(x) * x_coeff,
                 max(y) - (y_coeff + 0.15) * max(y),
-                r'$\mathrm{R^2_{\mathrm{\mathsf{mean\ T100}}}}$= '
+                r'$\mathrm{R^2_{\mathrm{\mathsf{mean,\ ' + top_gene_label + r'}}}}$= '
                 + f'{r_value_diff ** 2: .2f}',
                 fontsize = kwargs.get('textsize', fontsize),
             )
         if save:
-            plt.savefig(f'{path_to_save}', dpi = 200, bbox_inches = 'tight')
+            save_figure_jpg_pdf(path_to_save, dpi=300, bbox_inches='tight')
         if show:
             plt.show()
         plt.close()
@@ -485,7 +506,8 @@ class EGD_model:
         save = True,
         gene_list: Optional[list] = None,
         show = False,
-        top_100_genes = None,
+        top_genes = None,
+        top_gene_label: str = 'T50',
         verbose = False,
         legend = True,
         title: Optional[str] = None,
@@ -495,7 +517,7 @@ class EGD_model:
         **kwargs,
     ):
         import seaborn as sns
-        diff_genes = top_100_genes
+        diff_genes = top_genes
         stim = adata[adata.obs[cond_key] == axis_keys['y']]
         pred = adata[adata.obs[cond_key] == axis_keys['x']]
         if diff_genes is not None:
@@ -508,7 +530,7 @@ class EGD_model:
             y_diff: np.ndarray = np.asarray(np.var(stim_diff.X.toarray(), axis=0)).ravel()
             _, _, r_value_diff, _, _ = stats.linregress(x_diff, y_diff)
             if verbose:
-                print('Top 100 DEGs var: ', r_value_diff**2)
+                print(f'{top_gene_label} DEGs var: ', r_value_diff**2)
         x: np.ndarray = np.asarray(np.var(pred.X.toarray(), axis=0)).ravel()
         y: np.ndarray = np.asarray(np.var(stim.X.toarray(), axis=0)).ravel()
         _, _, r_value, _, _ = stats.linregress(x, y)
@@ -555,12 +577,12 @@ class EGD_model:
             ax.text(
                 max(x) - max(x) * x_coeff,
                 max(y) - (y_coeff + 0.15) * max(y),
-                r'$\mathrm{R^2_{\mathrm{\mathsf{mean\ T100}}}}$= '
+                r'$\mathrm{R^2_{\mathrm{\mathsf{var,\ ' + top_gene_label + r'}}}}$= '
                 + f'{r_value_diff ** 2: .2f}',
                 fontsize = kwargs.get('textsize', fontsize),
             )
         if save:
-            plt.savefig(f'{path_to_save}', dpi = 200, bbox_inches = 'tight')
+            save_figure_jpg_pdf(path_to_save, dpi=300, bbox_inches='tight')
         if show:
             plt.show()
         plt.close()

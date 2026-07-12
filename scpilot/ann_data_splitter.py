@@ -41,6 +41,36 @@ def validate_data_split(n_samples: int, train_size: float, validation_size: Opti
             'resulting train set will be empty. Adjust any of the aforementioned parameters.'
         )
     return n_train, n_val
+
+def adjust_train_val_counts(
+    n_train: int,
+    n_val: int,
+    batch_size: int,
+):
+    """Adjust train/validation counts to avoid singleton final mini-batches."""
+    if batch_size is None or batch_size <= 1:
+        return n_train, n_val
+
+    # delta > 0: move cells from validation to training
+    # delta < 0: move cells from training to validation
+    for delta in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]:
+        new_n_train = n_train + delta
+        new_n_val = n_val - delta
+
+        if new_n_train <= 0 or new_n_val < 0:
+            continue
+
+        train_ok = new_n_train % batch_size != 1
+        val_ok = (new_n_val == 0) or (new_n_val % batch_size != 1)
+
+        if train_ok and val_ok:
+            return new_n_train, new_n_val
+
+    raise ValueError(
+        f"Could not avoid singleton final batches with "
+        f"n_train={n_train}, n_val={n_val}, batch_size={batch_size}."
+    )
+
 class AnnDataSplitter(pl.LightningDataModule):
     def __init__(
         self,
@@ -50,24 +80,51 @@ class AnnDataSplitter(pl.LightningDataModule):
         validation_size: Optional[float] = None,
         shuffle_set_split: bool = True,
         pin_memory: bool = False,
+        random_state: Optional[int] = None,
+        avoid_singleton_batch: bool = True,
         **kwargs,
     ):
         super().__init__()
         self.adata = adata
-        self.batch_size = batch_size
+        self.batch_size = int(batch_size)
         self.anndataset = AnnDataset(adata)
         self.train_size = float(train_size)
         self.validation_size = validation_size
         self.shuffle_set_split = shuffle_set_split
+        self.random_state = random_state
+        self.avoid_singleton_batch = avoid_singleton_batch
         self.data_loader_kwargs = kwargs
         self.pin_memory = pin_memory
-        self.n_train, self.n_val = validate_data_split(self.adata.n_obs, self.train_size, self.validation_size)
+
+        self.n_train, self.n_val = validate_data_split(
+            self.adata.n_obs,
+            self.train_size,
+            self.validation_size,
+        )
+
+        if self.avoid_singleton_batch:
+            old_n_train, old_n_val = self.n_train, self.n_val
+
+            self.n_train, self.n_val = adjust_train_val_counts(
+                n_train=self.n_train,
+                n_val=self.n_val,
+                batch_size=self.batch_size,
+            )
+
+            print(
+                f"[AnnDataSplitter] n_obs={self.adata.n_obs} | "
+                f"train={self.n_train} | val={self.n_val} | "
+                f"train_mod_batch={self.n_train % self.batch_size} | "
+                f"val_mod_batch={(self.n_val % self.batch_size) if self.n_val > 0 else 0} | "
+                f"original_train={old_n_train} | original_val={old_n_val}",
+                flush=True,
+            )
     def setup(self, stage: Optional[str] = None):
         n_train = self.n_train
         n_val = self.n_val
         indices = np.arange(self.adata.n_obs)
         if self.shuffle_set_split:
-            random_state = np.random.RandomState()
+            random_state = np.random.RandomState(self.random_state)
             indices = random_state.permutation(indices)
         self.val_idx = indices[: n_val]
         self.train_idx = indices[n_val: (n_val + n_train)]
