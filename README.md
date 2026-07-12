@@ -1,6 +1,6 @@
 ## Predicting single-cell perturbation responses across biological contexts with a deep generative model integrating optimal transport
 
-**Authors**: \#Jialiang Wang, \#Ziqi Liu, \#Zhengqian Zhang, Yikun Cao, Junjun Ren, Peng Cheng, Jingjing Tian, Lingyun Xie, \*Zhanwei Du, \*Yongzhuang Liu
+**Authors**: \#Jialiang Wang, \#Ziqi Liu, \#Zhengqian Zhang, Yikun Cao, Junjun Ren, Peng Cheng, Jingjing Tian, Lingyun Xie, \*Xin Lu, \*Zhanwei Du, \*Yongzhuang Liu
 
 \# Equal contribution.
 
@@ -35,7 +35,7 @@ pip install torch==2.2.2
 ```
 To install `scPILOT` run:
 ```
-python setup.py develop
+pip install -e .
 ```
 
 ## Datasets
