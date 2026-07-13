@@ -101,6 +101,7 @@ def predict_perturbation(
     stim_key = 'LPS6',
     cell_label_key = 'species',
     query_key = 'mouse',
+    sub_key = 'individual',
     seed = 1327,
     split_seed = 0,
 ):
@@ -175,6 +176,7 @@ def predict_perturbation(
                 ctrl_key = ctrl_key,
                 stim_key = stim_key,
                 query_key = query_key,
+                sub_key=sub_key,
             )
 
         adata_query_pred.obs[cond_key] = 'pred'

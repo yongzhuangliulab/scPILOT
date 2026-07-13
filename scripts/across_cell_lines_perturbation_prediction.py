@@ -13,7 +13,7 @@ from lightning.pytorch.callbacks import Callback
 from sklearn.metrics import pairwise
 from matplotlib import pyplot as plt
 from lightning import pytorch as pl
-from scpilot_extensible.egd_model import EGD_model
+from scpilot.egd_model import EGD_model
 
 parser = argparse.ArgumentParser(description = 'across_cell_lines_perturbation_prediction')
 parser.add_argument(
@@ -89,60 +89,6 @@ def mmd_distance(x, y, gamma):
 
 def compute_mmd_loss(lhs, rhs, gammas):
     return np.mean([mmd_distance(lhs, rhs, g) for g in gammas])
-
-
-
-
-def reg_mean_plot_compatible(
-    adata_eval,
-    cond_key,
-    stim_key,
-    path_to_save,
-    gene_list,
-    top50_genes,
-    show=False,
-    legend=False,
-):
-    """Call EGD_model.reg_mean_plot across scPILOT/scPILOT-extensible versions."""
-    import inspect
-
-    params = inspect.signature(EGD_model.reg_mean_plot).parameters
-    kwargs = {}
-
-    if 'top_genes' in params:
-        kwargs['top_genes'] = top50_genes
-        kwargs['top_gene_label'] = 'T50'
-    else:
-        # Older scpilot_extensible versions only expose top_100_genes.
-        # We still pass top50_genes here; only the internal label name differs.
-        kwargs['top_100_genes'] = top50_genes
-
-    result = EGD_model.reg_mean_plot(
-        adata_eval,
-        cond_key=cond_key,
-        axis_keys={'x': 'pred', 'y': stim_key},
-        labels={'x': 'Prediction', 'y': 'Ground truth'},
-        path_to_save=path_to_save,
-        gene_list=gene_list,
-        show=show,
-        legend=legend,
-        **kwargs,
-    )
-
-    if isinstance(result, tuple):
-        return result
-
-    # Defensive fallback for implementations that silently ignore top-gene kwargs.
-    pred = adata_eval[adata_eval.obs[cond_key] == 'pred']
-    stim = adata_eval[adata_eval.obs[cond_key] == stim_key]
-    x = np.asarray(np.mean(to_dense_array(pred[:, top50_genes].X), axis=0)).ravel()
-    y = np.asarray(np.mean(to_dense_array(stim[:, top50_genes].X), axis=0)).ravel()
-    if np.std(x) == 0 or np.std(y) == 0:
-        r2mean_top50 = np.nan
-    else:
-        r2mean_top50 = float(np.corrcoef(x, y)[0, 1] ** 2)
-
-    return float(result), r2mean_top50
 
 
 def predict_perturbation(
@@ -234,14 +180,16 @@ def predict_perturbation(
         adata_query_pred.obs[cond_key] = 'pred'
         adata_query_eval = ad.concat([adata_query_stim, adata_query_pred])
         plt.figure()
-        r2mean_all, r2mean_top50 = reg_mean_plot_compatible(
-            adata_eval=adata_query_eval,
+        r2mean_all, r2mean_top50 = EGD_model.reg_mean_plot(
+            adata_query_eval,
             cond_key=cond_key,
-            stim_key=stim_key,
+            axis_keys={'x': 'pred', 'y': stim_key},
+            labels={'x': 'Prediction', 'y': 'Ground truth'},
             path_to_save=f'../Figures/{experiment_name}/{eval_model_name}_{data_file}_reg_mean_{query_key}_seed{seed}.jpg',
             gene_list=top50_genes[:10],
-            top50_genes=top50_genes,
             show=False,
+            top_genes=top50_genes,
+            top_gene_label='T50',
             legend=False,
         )
 

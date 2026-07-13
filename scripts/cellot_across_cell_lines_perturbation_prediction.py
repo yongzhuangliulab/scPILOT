@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 
 from cellot.models import load_autoencoder_model, load_cellot_model
 from cellot.utils import load_config
-from scpilot_extensible.egd_model import EGD_model
+from scpilot.egd_model import EGD_model
 
 
 parser = argparse.ArgumentParser(description="CellOT across-cell-line perturbation prediction")
