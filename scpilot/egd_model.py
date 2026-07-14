@@ -319,87 +319,87 @@ class EGD_model:
         sc.tl.leiden(adata_atlas_ctrl)
         atlas_leidens = adata_atlas_ctrl.obs['leiden'].unique().tolist()
         adata_query_pred_list = []
-        if sub_key is None:
-            for query_leiden in query_leidens:
-                adata_query_ctrl_leiden = adata_query_ctrl[adata_query_ctrl.obs['leiden'] == query_leiden].copy()
-                _, _, latent_z_query_ctrl_leiden = self.get_latent_representation(adata_query_ctrl_leiden)
-                delta_query_leiden_list = []
-                OTloss_list = []
-                for atlas_leiden in atlas_leidens:
-                    adata_atlas_ctrl_leiden = adata_atlas_ctrl[adata_atlas_ctrl.obs['leiden'] == atlas_leiden].copy()
-                    _, _, latent_z_atlas_ctrl_leiden = self.get_latent_representation(adata_atlas_ctrl_leiden)
-                    OT_query2atlas, OTloss_query2atlas = ot_naive(
-                        latent_z_query_ctrl_leiden,
-                        latent_z_atlas_ctrl_leiden,
-                    )
-                    delta_query_leiden_list.append(
-                        (OT_query2atlas / np.sum(OT_query2atlas, axis = 1)[: , None])
-                        @ adata_atlas_ctrl_leiden.obsm['delta']
-                    )
-                    OTloss_list.append(OTloss_query2atlas)
-                OTloss_mtx = np.array(OTloss_list)
-                delta_query_weight = (np.exp(-OTloss_mtx) / np.sum(np.exp(-OTloss_mtx))).tolist()
-                delta_query_leiden = np.zeros(delta_query_leiden_list[0].shape)
-                for i in range(len(delta_query_leiden_list)):
-                    delta_query_leiden += delta_query_leiden_list[i] * delta_query_weight[i]
-                adata_query_ctrl_leiden.obsm['delta'] = delta_query_leiden
-                latent_z_query_pred_leiden = latent_z_query_ctrl_leiden + delta_query_leiden
-                adata_X_query_pred_leiden = (
-                    self.module.generate(torch.Tensor(latent_z_query_pred_leiden)).cpu().detach().numpy()
+        # if sub_key is None:
+        for query_leiden in query_leidens:
+            adata_query_ctrl_leiden = adata_query_ctrl[adata_query_ctrl.obs['leiden'] == query_leiden].copy()
+            _, _, latent_z_query_ctrl_leiden = self.get_latent_representation(adata_query_ctrl_leiden)
+            delta_query_leiden_list = []
+            OTloss_list = []
+            for atlas_leiden in atlas_leidens:
+                adata_atlas_ctrl_leiden = adata_atlas_ctrl[adata_atlas_ctrl.obs['leiden'] == atlas_leiden].copy()
+                _, _, latent_z_atlas_ctrl_leiden = self.get_latent_representation(adata_atlas_ctrl_leiden)
+                OT_query2atlas, OTloss_query2atlas = ot_naive(
+                    latent_z_query_ctrl_leiden,
+                    latent_z_atlas_ctrl_leiden,
                 )
-                adata_query_pred_leiden = ad.AnnData(
-                    X = adata_X_query_pred_leiden,
-                    obs = adata_query_ctrl_leiden.obs.copy(),
-                    var = adata_query_ctrl_leiden.var.copy(),
-                    obsm = adata_query_ctrl_leiden.obsm.copy(),
+                delta_query_leiden_list.append(
+                    (OT_query2atlas / np.sum(OT_query2atlas, axis = 1)[: , None])
+                    @ adata_atlas_ctrl_leiden.obsm['delta']
                 )
-                adata_query_pred_list.append(adata_query_pred_leiden)
-        else:
-            for sub_cls in sub_classes:
-                for query_leiden in query_leidens:
-                    adata_query_ctrl_leiden = adata_query_ctrl[
-                        (adata_query_ctrl.obs[sub_key] == sub_cls)
-                        & (adata_query_ctrl.obs['leiden'] == query_leiden)
-                    ].copy()
-                    if adata_query_ctrl_leiden.n_obs == 0:
-                        continue
-                    _, _, latent_z_query_ctrl_leiden = self.get_latent_representation(adata_query_ctrl_leiden)
-                    delta_query_leiden_list = []
-                    OTloss_list = []
-                    for atlas_leiden in atlas_leidens:
-                        adata_atlas_ctrl_leiden = adata_atlas_ctrl[
-                            (adata_atlas_ctrl.obs[sub_key] == sub_cls)
-                            & (adata_atlas_ctrl.obs['leiden'] == atlas_leiden)
-                        ].copy()
-                        if adata_atlas_ctrl_leiden.n_obs == 0:
-                            continue
-                        _, _, latent_z_atlas_ctrl_leiden = self.get_latent_representation(adata_atlas_ctrl_leiden)
-                        OT_query2atlas, OTloss_query2atlas = ot_naive(
-                            latent_z_query_ctrl_leiden,
-                            latent_z_atlas_ctrl_leiden,
-                        )
-                        delta_query_leiden_list.append(
-                            (OT_query2atlas / np.sum(OT_query2atlas, axis = 1)[: , None])
-                            @ adata_atlas_ctrl_leiden.obsm['delta']
-                        )
-                        OTloss_list.append(OTloss_query2atlas)
-                    OTloss_mtx = np.array(OTloss_list)
-                    delta_query_weight = (np.exp(-OTloss_mtx) / np.sum(np.exp(-OTloss_mtx))).tolist()
-                    delta_query_leiden = np.zeros(delta_query_leiden_list[0].shape)
-                    for i in range(len(delta_query_leiden_list)):
-                        delta_query_leiden += delta_query_leiden_list[i] * delta_query_weight[i]
-                    adata_query_ctrl_leiden.obsm['delta'] = delta_query_leiden
-                    latent_z_query_pred_leiden = latent_z_query_ctrl_leiden + delta_query_leiden
-                    adata_X_query_pred_leiden = (
-                        self.module.generate(torch.Tensor(latent_z_query_pred_leiden)).cpu().detach().numpy()
-                    )
-                    adata_query_pred_leiden = ad.AnnData(
-                        X = adata_X_query_pred_leiden,
-                        obs = adata_query_ctrl_leiden.obs.copy(),
-                        var = adata_query_ctrl_leiden.var.copy(),
-                        obsm = adata_query_ctrl_leiden.obsm.copy(),
-                    )
-                    adata_query_pred_list.append(adata_query_pred_leiden)
+                OTloss_list.append(OTloss_query2atlas)
+            OTloss_mtx = np.array(OTloss_list)
+            delta_query_weight = (np.exp(-OTloss_mtx) / np.sum(np.exp(-OTloss_mtx))).tolist()
+            delta_query_leiden = np.zeros(delta_query_leiden_list[0].shape)
+            for i in range(len(delta_query_leiden_list)):
+                delta_query_leiden += delta_query_leiden_list[i] * delta_query_weight[i]
+            adata_query_ctrl_leiden.obsm['delta'] = delta_query_leiden
+            latent_z_query_pred_leiden = latent_z_query_ctrl_leiden + delta_query_leiden
+            adata_X_query_pred_leiden = (
+                self.module.generate(torch.Tensor(latent_z_query_pred_leiden)).cpu().detach().numpy()
+            )
+            adata_query_pred_leiden = ad.AnnData(
+                X = adata_X_query_pred_leiden,
+                obs = adata_query_ctrl_leiden.obs.copy(),
+                var = adata_query_ctrl_leiden.var.copy(),
+                obsm = adata_query_ctrl_leiden.obsm.copy(),
+            )
+            adata_query_pred_list.append(adata_query_pred_leiden)
+        # else:
+        #     for sub_cls in sub_classes:
+        #         for query_leiden in query_leidens:
+        #             adata_query_ctrl_leiden = adata_query_ctrl[
+        #                 (adata_query_ctrl.obs[sub_key] == sub_cls)
+        #                 & (adata_query_ctrl.obs['leiden'] == query_leiden)
+        #             ].copy()
+        #             if adata_query_ctrl_leiden.n_obs == 0:
+        #                 continue
+        #             _, _, latent_z_query_ctrl_leiden = self.get_latent_representation(adata_query_ctrl_leiden)
+        #             delta_query_leiden_list = []
+        #             OTloss_list = []
+        #             for atlas_leiden in atlas_leidens:
+        #                 adata_atlas_ctrl_leiden = adata_atlas_ctrl[
+        #                     (adata_atlas_ctrl.obs[sub_key] == sub_cls)
+        #                     & (adata_atlas_ctrl.obs['leiden'] == atlas_leiden)
+        #                 ].copy()
+        #                 if adata_atlas_ctrl_leiden.n_obs == 0:
+        #                     continue
+        #                 _, _, latent_z_atlas_ctrl_leiden = self.get_latent_representation(adata_atlas_ctrl_leiden)
+        #                 OT_query2atlas, OTloss_query2atlas = ot_naive(
+        #                     latent_z_query_ctrl_leiden,
+        #                     latent_z_atlas_ctrl_leiden,
+        #                 )
+        #                 delta_query_leiden_list.append(
+        #                     (OT_query2atlas / np.sum(OT_query2atlas, axis = 1)[: , None])
+        #                     @ adata_atlas_ctrl_leiden.obsm['delta']
+        #                 )
+        #                 OTloss_list.append(OTloss_query2atlas)
+        #             OTloss_mtx = np.array(OTloss_list)
+        #             delta_query_weight = (np.exp(-OTloss_mtx) / np.sum(np.exp(-OTloss_mtx))).tolist()
+        #             delta_query_leiden = np.zeros(delta_query_leiden_list[0].shape)
+        #             for i in range(len(delta_query_leiden_list)):
+        #                 delta_query_leiden += delta_query_leiden_list[i] * delta_query_weight[i]
+        #             adata_query_ctrl_leiden.obsm['delta'] = delta_query_leiden
+        #             latent_z_query_pred_leiden = latent_z_query_ctrl_leiden + delta_query_leiden
+        #             adata_X_query_pred_leiden = (
+        #                 self.module.generate(torch.Tensor(latent_z_query_pred_leiden)).cpu().detach().numpy()
+        #             )
+        #             adata_query_pred_leiden = ad.AnnData(
+        #                 X = adata_X_query_pred_leiden,
+        #                 obs = adata_query_ctrl_leiden.obs.copy(),
+        #                 var = adata_query_ctrl_leiden.var.copy(),
+        #                 obsm = adata_query_ctrl_leiden.obsm.copy(),
+        #             )
+        #             adata_query_pred_list.append(adata_query_pred_leiden)
         adata_query_pred = ad.concat(adata_query_pred_list)
         return adata_query_pred, adata_query_pred.obsm['delta']
     @staticmethod
