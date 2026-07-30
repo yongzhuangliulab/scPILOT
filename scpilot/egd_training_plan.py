@@ -159,39 +159,59 @@ class EGDTrainingPlan(pl.LightningModule):
         return optim_creator
     def configure_optimizers(self):
         assert isinstance(self.module, EGD_network)
-        params1 = itertools.chain(
+
+        # Encoder + generator optimizer.
+        vae_params = itertools.chain(
             self.module.z_encoder.parameters(),
             self.module.generator.parameters(),
         )
-        optimizer1 = self.get_optimizer_creator()(params1)
-        config1 = {'optimizer': optimizer1}
+        optimizer_vae = self.get_optimizer_creator()(vae_params)
+
+        scheduler_config = None
+
         if self.reduce_lr_on_plateau:
-            scheduler1 = ReduceLROnPlateau(
-                optimizer1,
-                patience = self.lr_patience,
-                factor = self.lr_factor,
-                threshold = self.lr_threshold,
-                min_lr = self.lr_min,
-                threshold_mode = 'abs',
-                verbose = True,
+            scheduler_vae = ReduceLROnPlateau(
+                optimizer_vae,
+                patience=self.lr_patience,
+                factor=self.lr_factor,
+                threshold=self.lr_threshold,
+                min_lr=self.lr_min,
+                threshold_mode='abs',
+                verbose=True,
             )
-            config1.update(
-                {
-                    'lr_scheduler': {
-                        'scheduler': scheduler1,
-                        'monitor': self.lr_scheduler_metric,
-                    }
+
+            scheduler_config = {
+                'scheduler': scheduler_vae,
+                'monitor': self.lr_scheduler_metric,
+            }
+
+        # w/o-discriminator: only optimize encoder and generator.
+        if not self.module.use_discriminator:
+            if scheduler_config is not None:
+                return {
+                    'optimizer': optimizer_vae,
+                    'lr_scheduler': scheduler_config,
                 }
+
+            return optimizer_vae
+
+        # Full model: add discriminator optimizer.
+        if self.module.discriminator is None:
+            raise RuntimeError(
+                "use_discriminator=True but discriminator is None."
             )
-        params2 = self.module.discriminator.parameters()
-        optimizer2 = self.get_optimizer_creator()(params2)
-        config2 = {'optimizer': optimizer2}
-        opts = [config1.pop('optimizer'), config2['optimizer']]
-        if 'lr_scheduler' in config1:
-            scheds = [config1['lr_scheduler']]
-            return opts, scheds
-        else:
-            return opts
+
+        optimizer_discriminator = self.get_optimizer_creator()(
+            self.module.discriminator.parameters()
+        )
+
+        if scheduler_config is not None:
+            return (
+                [optimizer_vae, optimizer_discriminator],
+                [scheduler_config],
+            )
+
+        return [optimizer_vae, optimizer_discriminator]
     def forward(self, *args, **kwargs):
         return self.module(*args, **kwargs)
     @torch.inference_mode()
@@ -226,19 +246,147 @@ class EGDTrainingPlan(pl.LightningModule):
             batch_size = n_obs_minibatch,
             sync_dist = self.use_sync_dist,
         )
+    @staticmethod
+    @torch.no_grad()
+    def _compute_gene_reconstruction_mmd(
+        batch: torch.Tensor,
+        generative_outputs: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Compute the MMD^2 between the observed
+        cells in one minibatch and their reconstructed cells.
+
+        This metric is used only as a shared training diagnostic. It is not
+        added to the optimization objective.
+        """
+
+        import numpy as np
+        from sklearn.metrics import pairwise
+
+        def mmd_distance(x, y, gamma):
+            xx = pairwise.rbf_kernel(x, x, gamma)
+            xy = pairwise.rbf_kernel(x, y, gamma)
+            yy = pairwise.rbf_kernel(y, y, gamma)
+            return xx.mean() + yy.mean() - 2 * xy.mean()
+
+
+        def compute_mmd_loss(lhs, rhs, gammas):
+            return float(np.mean([mmd_distance(lhs, rhs, g) for g in gammas]))
+
+        x_hat = generative_outputs['xHat'].detach().cpu().numpy()
+        x = batch.detach().cpu().numpy()
+
+        if x.ndim != 2 or x_hat.ndim != 2:
+            raise ValueError(
+                'Observed and reconstructed cells must be 2D tensors.'
+            )
+
+        if x.shape[1] != x_hat.shape[1]:
+            raise ValueError(
+                'Observed and reconstructed cells must have the same '
+                'number of genes.'
+            )
+        
+        gammas = np.logspace(1, -3, num=50)
+        mmd = compute_mmd_loss(x, x_hat, gammas)
+
+        return mmd
     def training_step(self, batch, batch_idx):
-        opts = self.optimizers()
-        opt1, opt2 = opts
-        _, _, _, loss = self.forward(batch)
-        self.log('VAE_loss_train', loss['VAE_loss'], prog_bar = True, logger = True, on_step = False, on_epoch = True)
-        self.compute_and_log_metrics(loss['rl'], loss['kld'], loss['dl'], self.train_metrics, 'train')
-        opt1.zero_grad()
-        self.manual_backward(loss['VAE_loss'])
-        opt1.step()
-        opt2.zero_grad()
-        self.manual_backward(loss['dl'])
-        opt2.step()
+        _, generative_outputs, _, loss = self.forward(batch)
+
+        gene_reconstruction_mmd = (
+            self._compute_gene_reconstruction_mmd(
+                batch=batch,
+                generative_outputs=generative_outputs,
+            )
+        )
+
+        self.log(
+            'gene_reconstruction_mmd_train',
+            gene_reconstruction_mmd,
+            prog_bar=False,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch.shape[0],
+            sync_dist=self.use_sync_dist,
+        )
+
+        self.log(
+            'VAE_loss_train',
+            loss['VAE_loss'],
+            prog_bar=True,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch.shape[0],
+            sync_dist=self.use_sync_dist,
+        )
+
+        self.compute_and_log_metrics(
+            loss['rl'],
+            loss['kld'],
+            loss['dl'],
+            self.train_metrics,
+            'train',
+        )
+
+        if self.module.use_discriminator:
+            opt_vae, opt_discriminator = self.optimizers()
+
+            # Update encoder and generator.
+            opt_vae.zero_grad()
+            self.manual_backward(loss['VAE_loss'])
+            opt_vae.step()
+
+            # Update discriminator.
+            opt_discriminator.zero_grad()
+            self.manual_backward(loss['dl'])
+            opt_discriminator.step()
+
+        else:
+            opt_vae = self.optimizers()
+
+            opt_vae.zero_grad()
+            self.manual_backward(loss['VAE_loss'])
+            opt_vae.step()
+
     def validation_step(self, batch, batch_idx):
-        _, _, _, loss = self.forward(batch)
-        self.log('VAE_loss_val', loss['VAE_loss'], prog_bar = True, logger = True, on_step = False, on_epoch = True)
-        self.compute_and_log_metrics(loss['rl'], loss['kld'], loss['dl'], self.val_metrics, 'validation')
+        _, generative_outputs, _, loss = self.forward(batch)
+
+        gene_reconstruction_mmd = (
+            self._compute_gene_reconstruction_mmd(
+                batch=batch,
+                generative_outputs=generative_outputs,
+            )
+        )
+
+        self.log(
+            'gene_reconstruction_mmd_validation',
+            gene_reconstruction_mmd,
+            prog_bar=False,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch.shape[0],
+            sync_dist=self.use_sync_dist,
+        )
+
+        self.log(
+            'VAE_loss_val',
+            loss['VAE_loss'],
+            prog_bar=True,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch.shape[0],
+            sync_dist=self.use_sync_dist,
+        )
+
+        self.compute_and_log_metrics(
+            loss['rl'],
+            loss['kld'],
+            loss['dl'],
+            self.val_metrics,
+            'validation',
+        )

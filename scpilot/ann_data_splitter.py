@@ -71,6 +71,59 @@ def adjust_train_val_counts(
         f"n_train={n_train}, n_val={n_val}, batch_size={batch_size}."
     )
 
+def stratified_train_val_split(
+    adata: ad.AnnData,
+    n_train: int,
+    n_val: int,
+    stratify_keys: list[str],
+    random_state: Optional[int] = None,
+    min_val_per_group: int = 1,
+):
+    rng = np.random.RandomState(random_state)
+
+    obs = adata.obs.copy()
+    group_labels = (
+        obs[stratify_keys]
+        .astype(str)
+        .agg("||".join, axis=1)
+        .to_numpy()
+    )
+
+    train_idx = []
+    val_idx = []
+
+    unique_groups = np.unique(group_labels)
+
+    for group in unique_groups:
+        group_idx = np.where(group_labels == group)[0]
+        group_idx = rng.permutation(group_idx)
+
+        n_group = len(group_idx)
+
+        if n_group <= 1:
+            train_idx.extend(group_idx.tolist())
+            continue
+
+        group_val_frac = n_val / (n_train + n_val)
+        n_group_val = int(round(n_group * group_val_frac))
+
+        if n_group_val == 0 and n_group >= 2:
+            n_group_val = min_val_per_group
+
+        if n_group_val >= n_group:
+            n_group_val = n_group - 1
+
+        val_idx.extend(group_idx[:n_group_val].tolist())
+        train_idx.extend(group_idx[n_group_val:].tolist())
+
+    train_idx = np.asarray(train_idx, dtype=int)
+    val_idx = np.asarray(val_idx, dtype=int)
+
+    train_idx = rng.permutation(train_idx)
+    val_idx = rng.permutation(val_idx)
+
+    return train_idx, val_idx
+
 class AnnDataSplitter(pl.LightningDataModule):
     def __init__(
         self,
@@ -82,6 +135,7 @@ class AnnDataSplitter(pl.LightningDataModule):
         pin_memory: bool = False,
         random_state: Optional[int] = None,
         avoid_singleton_batch: bool = True,
+        stratify_keys: Optional[list[str]] = None,
         **kwargs,
     ):
         super().__init__()
@@ -95,6 +149,7 @@ class AnnDataSplitter(pl.LightningDataModule):
         self.avoid_singleton_batch = avoid_singleton_batch
         self.data_loader_kwargs = kwargs
         self.pin_memory = pin_memory
+        self.stratify_keys = stratify_keys
 
         self.n_train, self.n_val = validate_data_split(
             self.adata.n_obs,
@@ -122,13 +177,30 @@ class AnnDataSplitter(pl.LightningDataModule):
     def setup(self, stage: Optional[str] = None):
         n_train = self.n_train
         n_val = self.n_val
-        indices = np.arange(self.adata.n_obs)
-        if self.shuffle_set_split:
-            random_state = np.random.RandomState(self.random_state)
-            indices = random_state.permutation(indices)
-        self.val_idx = indices[: n_val]
-        self.train_idx = indices[n_val: (n_val + n_train)]
-        self.test_idx = indices[(n_val + n_train): ]
+
+        if self.stratify_keys is not None and len(self.stratify_keys) > 0:
+            self.train_idx, self.val_idx = stratified_train_val_split(
+                self.adata,
+                n_train=n_train,
+                n_val=n_val,
+                stratify_keys=self.stratify_keys,
+                random_state=self.random_state,
+            )
+
+            used = np.concatenate([self.train_idx, self.val_idx])
+            all_idx = np.arange(self.adata.n_obs)
+            self.test_idx = np.setdiff1d(all_idx, used)
+
+        else:
+            indices = np.arange(self.adata.n_obs)
+
+            if self.shuffle_set_split:
+                random_state = np.random.RandomState(self.random_state)
+                indices = random_state.permutation(indices)
+
+            self.val_idx = indices[: n_val]
+            self.train_idx = indices[n_val: (n_val + n_train)]
+            self.test_idx = indices[(n_val + n_train):]
     def train_dataloader(self):
         return DataLoader(
             self.anndataset[self.train_idx],

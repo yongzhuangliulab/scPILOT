@@ -199,7 +199,10 @@ class EGD_model:
         restrict_arithmetic_to = 'all',
     ):
         if restrict_arithmetic_to == 'all':
-            ctrl_x = self.adata[self.adata.obs[cond_key] == ctrl_key]
+            ctrl_x = self.adata[
+                (self.adata.obs[cond_key] == ctrl_key)
+                & (self.adata.obs[cell_label_key] != query_key)
+            ]
             stim_x = self.adata[self.adata.obs[cond_key] == stim_key]
             ctrl_x = balancer(ctrl_x, cell_label_key)
             stim_x = balancer(stim_x, cell_label_key)
@@ -256,6 +259,11 @@ class EGD_model:
         query_key: Optional[str] = None,
         adata_to_predict: Optional[AnnData] = None,
         sub_key: Optional[str] = None,
+        cov_key: Optional[str] = None,
+        cov_weight=1.0,
+        use_adaptive_weighting: bool = True,
+        use_leiden: bool = True,
+        use_latent_ot: bool = True,
     ):
         adata_atlas_stim = self.adata[self.adata.obs[cond_key] == stim_key].copy()
         class_names = sorted(adata_atlas_stim.obs[cell_label_key].unique().tolist())
@@ -276,130 +284,719 @@ class EGD_model:
             adata_query_ctrl = adata_to_predict
         _, _, latent_z_query_ctrl = self.get_latent_representation(adata_query_ctrl)
         adata_query_ctrl.obsm['latent_z'] = latent_z_query_ctrl
-        sc.pp.neighbors(adata_query_ctrl, use_rep = 'latent_z')
-        sc.tl.leiden(adata_query_ctrl)
-        query_leidens = adata_query_ctrl.obs['leiden'].unique().tolist()
-        if sub_key is not None:
-            sub_classes = sorted(adata_atlas_stim.obs[sub_key].unique().tolist())
         adata_atlas_ctrl_list = []
         for cls in class_names:
+            adata_atlas_cls_ctrl = adata_atlas_ctrl[adata_atlas_ctrl.obs[cell_label_key] == cls].copy()
+            adata_atlas_cls_stim = adata_atlas_stim[adata_atlas_stim.obs[cell_label_key] == cls].copy()
             if sub_key is None:
-                adata_atlas_cls_ctrl = adata_atlas_ctrl[adata_atlas_ctrl.obs[cell_label_key] == cls].copy()
-                adata_atlas_cls_stim = adata_atlas_stim[adata_atlas_stim.obs[cell_label_key] == cls].copy()
                 _, _, latent_z_atlas_cls_ctrl = self.get_latent_representation(adata_atlas_cls_ctrl)
                 _, _, latent_z_atlas_cls_stim = self.get_latent_representation(adata_atlas_cls_stim)
                 adata_atlas_cls_ctrl.obsm['latent_z'] = latent_z_atlas_cls_ctrl
-                OT_atlas_cls, _ = ot_naive(latent_z_atlas_cls_ctrl, latent_z_atlas_cls_stim)
-                delta_atlas_cls = (
-                    OT_atlas_cls / np.sum(OT_atlas_cls, axis = 1)[: , None]
-                ) @ latent_z_atlas_cls_stim - latent_z_atlas_cls_ctrl
+                if use_latent_ot:
+                    OT_atlas_cls, _ = ot_naive(
+                        latent_z_atlas_cls_ctrl,
+                        latent_z_atlas_cls_stim,
+                    )
+
+                    delta_atlas_cls = (
+                        OT_atlas_cls
+                        / (
+                            np.sum(OT_atlas_cls, axis=1)[:, None]
+                            + 1e-12
+                        )
+                    ) @ latent_z_atlas_cls_stim - latent_z_atlas_cls_ctrl
+
+                else:
+                    # Ablation: replace cell-level latent OT with
+                    # one mean latent shift for the reference cell type.
+                    mean_delta_atlas_cls = (
+                        np.mean(
+                            latent_z_atlas_cls_stim,
+                            axis=0,
+                        )
+                        - np.mean(
+                            latent_z_atlas_cls_ctrl,
+                            axis=0,
+                        )
+                    )
+
+                    delta_atlas_cls = np.repeat(
+                        mean_delta_atlas_cls[None, :],
+                        latent_z_atlas_cls_ctrl.shape[0],
+                        axis=0,
+                    )
                 adata_atlas_cls_ctrl.obsm['delta'] = delta_atlas_cls
                 adata_atlas_ctrl_list.append(adata_atlas_cls_ctrl)
             else:
+                sub_classes = sorted(adata_atlas_cls_stim.obs[sub_key].unique().tolist())
                 for sub_cls in sub_classes:
-                    adata_atlas_cls_ctrl = adata_atlas_ctrl[
-                        (adata_atlas_ctrl.obs[cell_label_key] == cls)
-                        & (adata_atlas_ctrl.obs[sub_key] == sub_cls)
+                    adata_atlas_cls_sub_ctrl = adata_atlas_cls_ctrl[
+                        adata_atlas_cls_ctrl.obs[sub_key] == sub_cls
                     ].copy()
-                    adata_atlas_cls_stim = adata_atlas_stim[
-                        (adata_atlas_stim.obs[cell_label_key] == cls)
-                        & (adata_atlas_stim.obs[sub_key] == sub_cls)
+                    adata_atlas_cls_sub_stim = adata_atlas_cls_stim[
+                        adata_atlas_cls_stim.obs[sub_key] == sub_cls
                     ].copy()
-                    _, _, latent_z_atlas_cls_ctrl = self.get_latent_representation(adata_atlas_cls_ctrl)
-                    _, _, latent_z_atlas_cls_stim = self.get_latent_representation(adata_atlas_cls_stim)
-                    adata_atlas_cls_ctrl.obsm['latent_z'] = latent_z_atlas_cls_ctrl
-                    OT_atlas_cls, _ = ot_naive(latent_z_atlas_cls_ctrl, latent_z_atlas_cls_stim)
-                    delta_atlas_cls = (
-                        OT_atlas_cls / np.sum(OT_atlas_cls, axis = 1)[: , None]
-                    ) @ latent_z_atlas_cls_stim - latent_z_atlas_cls_ctrl
-                    adata_atlas_cls_ctrl.obsm['delta'] = delta_atlas_cls
-                    adata_atlas_ctrl_list.append(adata_atlas_cls_ctrl)
+                    _, _, latent_z_atlas_cls_sub_ctrl = self.get_latent_representation(
+                        adata_atlas_cls_sub_ctrl
+                    )
+                    _, _, latent_z_atlas_cls_sub_stim = self.get_latent_representation(
+                        adata_atlas_cls_sub_stim
+                    )
+                    adata_atlas_cls_sub_ctrl.obsm['latent_z'] = latent_z_atlas_cls_sub_ctrl
+                    if use_latent_ot:
+                        OT_atlas_cls_sub, _ = ot_naive(
+                            latent_z_atlas_cls_sub_ctrl,
+                            latent_z_atlas_cls_sub_stim,
+                        )
+
+                        delta_atlas_cls_sub = (
+                            OT_atlas_cls_sub
+                            / (
+                                np.sum(OT_atlas_cls_sub, axis=1)[:, None]
+                                + 1e-12
+                            )
+                        ) @ latent_z_atlas_cls_sub_stim - latent_z_atlas_cls_sub_ctrl
+
+                    else:
+                        # Ablation: one mean latent shift for this
+                        # cell-type/subcategory reference group.
+                        mean_delta_atlas_cls_sub = (
+                            np.mean(
+                                latent_z_atlas_cls_sub_stim,
+                                axis=0,
+                            )
+                            - np.mean(
+                                latent_z_atlas_cls_sub_ctrl,
+                                axis=0,
+                            )
+                        )
+
+                        delta_atlas_cls_sub = np.repeat(
+                            mean_delta_atlas_cls_sub[None, :],
+                            latent_z_atlas_cls_sub_ctrl.shape[0],
+                            axis=0,
+                        )
+                    adata_atlas_cls_sub_ctrl.obsm['delta'] = delta_atlas_cls_sub
+                    adata_atlas_ctrl_list.append(adata_atlas_cls_sub_ctrl)
         adata_atlas_ctrl = ad.concat(adata_atlas_ctrl_list)
-        sc.pp.neighbors(adata_atlas_ctrl, use_rep = 'latent_z')
-        sc.tl.leiden(adata_atlas_ctrl)
-        atlas_leidens = adata_atlas_ctrl.obs['leiden'].unique().tolist()
+
+        def transfer_delta_and_matching_loss(
+            latent_z_query: np.ndarray,
+            adata_reference_group: AnnData,
+        ) -> tuple[np.ndarray, float]:
+            """
+            Transfer a reference perturbation to query cells and return
+            the corresponding query-reference matching loss.
+
+            With latent OT:
+                - use the OT transport plan for cell-level transfer;
+                - use the OT transport cost for adaptive weighting.
+
+            Without latent OT:
+                - broadcast the mean reference perturbation vector;
+                - use squared centroid distance for adaptive weighting.
+            """
+            if adata_reference_group.n_obs == 0:
+                raise ValueError(
+                    'The reference group contains no cells.'
+                )
+
+            _, _, latent_z_reference = (
+                self.get_latent_representation(
+                    adata_reference_group
+                )
+            )
+
+            reference_delta = np.asarray(
+                adata_reference_group.obsm[
+                    'delta'
+                ]
+            )
+
+            if use_latent_ot:
+                OT_query2reference, matching_loss = ot_naive(
+                    latent_z_query,
+                    latent_z_reference,
+                )
+
+                transported_delta = (
+                    OT_query2reference
+                    / (
+                        np.sum(OT_query2reference, axis=1)[:, None]
+                        + 1e-12
+                    )
+                ) @ reference_delta
+
+            else:
+                # Ablation: do not establish a cell-level OT plan.
+                # Every query cell receives the mean perturbation
+                # of the current reference group.
+                mean_reference_delta = np.mean(
+                    reference_delta,
+                    axis=0,
+                    keepdims=True,
+                )
+
+                transported_delta = np.repeat(
+                    mean_reference_delta,
+                    latent_z_query.shape[0],
+                    axis=0,
+                )
+
+                query_centroid = np.mean(
+                    latent_z_query,
+                    axis=0,
+                )
+
+                reference_centroid = np.mean(
+                    latent_z_reference,
+                    axis=0,
+                )
+
+                # Non-OT matching loss retained for adaptive weighting.
+                matching_loss = float(
+                    np.sum(
+                        (
+                            query_centroid
+                            - reference_centroid
+                        ) ** 2
+                    )
+                )
+
+            return transported_delta, matching_loss
+
+        def aggregate_delta_by_cell_type(
+            latent_z_query: np.ndarray,
+            adata_reference_pool: AnnData,
+            empty_group_message: str,
+        ) -> np.ndarray:
+            """
+            Transfer perturbation vectors from reference cells to query cells.
+
+            Reference cells are grouped only by cell_label_key.
+            sub_key is ignored during query-reference matching.
+            For a different-covariate pool, individual covariate identities
+            are also ignored after the pool has been selected.
+            """
+            if adata_reference_pool.n_obs == 0:
+                raise ValueError(empty_group_message)
+
+            reference_cell_types = sorted(
+                adata_reference_pool.obs[
+                    cell_label_key
+                ].unique().tolist()
+            )
+
+            transported_delta_list = []
+            matching_loss_list = []
+
+            for reference_cell_type in reference_cell_types:
+                adata_reference_cell_type = (
+                    adata_reference_pool[
+                        adata_reference_pool.obs[
+                            cell_label_key
+                        ] == reference_cell_type
+                    ].copy()
+                )
+
+                transported_delta, matching_loss = (
+                    transfer_delta_and_matching_loss(
+                        latent_z_query=latent_z_query,
+                        adata_reference_group=(
+                            adata_reference_cell_type
+                        ),
+                    )
+                )
+
+                transported_delta_list.append(
+                    transported_delta
+                )
+                matching_loss_list.append(
+                    matching_loss
+                )
+
+            n_reference_cell_types = len(
+                transported_delta_list
+            )
+
+            if n_reference_cell_types == 0:
+                raise ValueError(empty_group_message)
+
+            if use_adaptive_weighting:
+                matching_loss_mtx = np.asarray(
+                    matching_loss_list,
+                    dtype=np.float64,
+                )
+
+                reference_weight_list = (
+                    np.exp(-matching_loss_mtx)
+                    / np.sum(np.exp(-matching_loss_mtx))
+                )
+            else:
+                reference_weight_list = np.full(
+                    n_reference_cell_types,
+                    1.0 / n_reference_cell_types,
+                    dtype=np.float64,
+                )
+
+            delta_query = np.zeros_like(
+                transported_delta_list[0]
+            )
+
+            for transported_delta, reference_weight in zip(
+                transported_delta_list,
+                reference_weight_list,
+            ):
+                delta_query += (
+                    transported_delta
+                    * reference_weight
+                )
+
+            return delta_query
+
+
         adata_query_pred_list = []
-        # if sub_key is None:
-        for query_leiden in query_leidens:
-            adata_query_ctrl_leiden = adata_query_ctrl[adata_query_ctrl.obs['leiden'] == query_leiden].copy()
-            _, _, latent_z_query_ctrl_leiden = self.get_latent_representation(adata_query_ctrl_leiden)
-            delta_query_leiden_list = []
-            OTloss_list = []
-            for atlas_leiden in atlas_leidens:
-                adata_atlas_ctrl_leiden = adata_atlas_ctrl[adata_atlas_ctrl.obs['leiden'] == atlas_leiden].copy()
-                _, _, latent_z_atlas_ctrl_leiden = self.get_latent_representation(adata_atlas_ctrl_leiden)
-                OT_query2atlas, OTloss_query2atlas = ot_naive(
-                    latent_z_query_ctrl_leiden,
-                    latent_z_atlas_ctrl_leiden,
+
+        if not use_leiden:
+            if cov_key is None:
+                # The complete query population is treated as one group.
+                # Reference cells are grouped only by cell_label_key.
+                delta_query_ctrl = aggregate_delta_by_cell_type(
+                    latent_z_query=latent_z_query_ctrl,
+                    adata_reference_pool=adata_atlas_ctrl,
+                    empty_group_message=(
+                        'No reference cell types are available for '
+                        'the no-Leiden perturbation transfer.'
+                    ),
                 )
-                delta_query_leiden_list.append(
-                    (OT_query2atlas / np.sum(OT_query2atlas, axis = 1)[: , None])
-                    @ adata_atlas_ctrl_leiden.obsm['delta']
+
+                adata_query_ctrl.obsm[
+                    'delta'
+                ] = delta_query_ctrl
+
+                latent_z_query_pred = (
+                    latent_z_query_ctrl
+                    + delta_query_ctrl
                 )
-                OTloss_list.append(OTloss_query2atlas)
-            OTloss_mtx = np.array(OTloss_list)
-            delta_query_weight = (np.exp(-OTloss_mtx) / np.sum(np.exp(-OTloss_mtx))).tolist()
-            delta_query_leiden = np.zeros(delta_query_leiden_list[0].shape)
-            for i in range(len(delta_query_leiden_list)):
-                delta_query_leiden += delta_query_leiden_list[i] * delta_query_weight[i]
-            adata_query_ctrl_leiden.obsm['delta'] = delta_query_leiden
-            latent_z_query_pred_leiden = latent_z_query_ctrl_leiden + delta_query_leiden
-            adata_X_query_pred_leiden = (
-                self.module.generate(torch.Tensor(latent_z_query_pred_leiden)).cpu().detach().numpy()
+
+                adata_X_query_pred = (
+                    self.module.generate(
+                        torch.Tensor(
+                            latent_z_query_pred
+                        )
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                )
+
+                adata_query_pred = ad.AnnData(
+                    X=adata_X_query_pred,
+                    obs=adata_query_ctrl.obs.copy(),
+                    var=adata_query_ctrl.var.copy(),
+                    obsm=adata_query_ctrl.obsm.copy(),
+                )
+
+                adata_query_pred_list.append(
+                    adata_query_pred
+                )
+
+            else:
+                query_cov_classes = sorted(
+                    adata_query_ctrl.obs[
+                        cov_key
+                    ].unique().tolist()
+                )
+
+                for query_cov_cls in query_cov_classes:
+                    # All query cells from one covariate class form one group.
+                    # No query Leiden clustering is performed.
+                    adata_query_cov_ctrl = (
+                        adata_query_ctrl[
+                            adata_query_ctrl.obs[
+                                cov_key
+                            ] == query_cov_cls
+                        ].copy()
+                    )
+
+                    _, _, latent_z_query_cov_ctrl = (
+                        self.get_latent_representation(
+                            adata_query_cov_ctrl
+                        )
+                    )
+
+                    delta_query_cov = np.zeros_like(
+                        latent_z_query_cov_ctrl
+                    )
+
+                    # ---------------------------------------------------------
+                    # Same-covariate reference pool
+                    # ---------------------------------------------------------
+                    # First select the same-cov pool, then group it only by
+                    # cell_label_key. sub_key does not participate in matching.
+                    adata_atlas_same_cov_ctrl = (
+                        adata_atlas_ctrl[
+                            adata_atlas_ctrl.obs[
+                                cov_key
+                            ] == query_cov_cls
+                        ].copy()
+                    )
+
+                    delta_same_cov = (
+                        aggregate_delta_by_cell_type(
+                            latent_z_query=(
+                                latent_z_query_cov_ctrl
+                            ),
+                            adata_reference_pool=(
+                                adata_atlas_same_cov_ctrl
+                            ),
+                            empty_group_message=(
+                                'No same-covariate reference '
+                                'cell types are available for '
+                                f'{cov_key}={query_cov_cls!r}.'
+                            ),
+                        )
+                    )
+
+                    delta_query_cov += (
+                        delta_same_cov
+                        * cov_weight
+                    )
+
+                    # ---------------------------------------------------------
+                    # Different-covariate reference pool
+                    # ---------------------------------------------------------
+                    # Pool all covariates other than query_cov_cls, then group
+                    # the pooled reference cells only by cell_label_key.
+                    adata_atlas_diff_cov_ctrl = (
+                        adata_atlas_ctrl[
+                            adata_atlas_ctrl.obs[
+                                cov_key
+                            ] != query_cov_cls
+                        ].copy()
+                    )
+
+                    delta_diff_cov = (
+                        aggregate_delta_by_cell_type(
+                            latent_z_query=(
+                                latent_z_query_cov_ctrl
+                            ),
+                            adata_reference_pool=(
+                                adata_atlas_diff_cov_ctrl
+                            ),
+                            empty_group_message=(
+                                'No different-covariate '
+                                'reference cell types are '
+                                'available for '
+                                f'{cov_key}={query_cov_cls!r}.'
+                            ),
+                        )
+                    )
+
+                    delta_query_cov += (
+                        delta_diff_cov
+                        * (1.0 - cov_weight)
+                    )
+
+                    adata_query_cov_ctrl.obsm[
+                        'delta'
+                    ] = delta_query_cov
+
+                    latent_z_query_cov_pred = (
+                        latent_z_query_cov_ctrl
+                        + delta_query_cov
+                    )
+
+                    adata_X_query_cov_pred = (
+                        self.module.generate(
+                            torch.Tensor(
+                                latent_z_query_cov_pred
+                            )
+                        )
+                        .cpu()
+                        .detach()
+                        .numpy()
+                    )
+
+                    adata_query_cov_pred = ad.AnnData(
+                        X=adata_X_query_cov_pred,
+                        obs=(
+                            adata_query_cov_ctrl
+                            .obs
+                            .copy()
+                        ),
+                        var=(
+                            adata_query_cov_ctrl
+                            .var
+                            .copy()
+                        ),
+                        obsm=(
+                            adata_query_cov_ctrl
+                            .obsm
+                            .copy()
+                        ),
+                    )
+
+                    adata_query_pred_list.append(
+                        adata_query_cov_pred
+                    )
+
+        elif cov_key is None:
+            sc.pp.neighbors(
+                adata_query_ctrl,
+                use_rep='latent_z',
             )
-            adata_query_pred_leiden = ad.AnnData(
-                X = adata_X_query_pred_leiden,
-                obs = adata_query_ctrl_leiden.obs.copy(),
-                var = adata_query_ctrl_leiden.var.copy(),
-                obsm = adata_query_ctrl_leiden.obsm.copy(),
-            )
-            adata_query_pred_list.append(adata_query_pred_leiden)
-        # else:
-        #     for sub_cls in sub_classes:
-        #         for query_leiden in query_leidens:
-        #             adata_query_ctrl_leiden = adata_query_ctrl[
-        #                 (adata_query_ctrl.obs[sub_key] == sub_cls)
-        #                 & (adata_query_ctrl.obs['leiden'] == query_leiden)
-        #             ].copy()
-        #             if adata_query_ctrl_leiden.n_obs == 0:
-        #                 continue
-        #             _, _, latent_z_query_ctrl_leiden = self.get_latent_representation(adata_query_ctrl_leiden)
-        #             delta_query_leiden_list = []
-        #             OTloss_list = []
-        #             for atlas_leiden in atlas_leidens:
-        #                 adata_atlas_ctrl_leiden = adata_atlas_ctrl[
-        #                     (adata_atlas_ctrl.obs[sub_key] == sub_cls)
-        #                     & (adata_atlas_ctrl.obs['leiden'] == atlas_leiden)
-        #                 ].copy()
-        #                 if adata_atlas_ctrl_leiden.n_obs == 0:
-        #                     continue
-        #                 _, _, latent_z_atlas_ctrl_leiden = self.get_latent_representation(adata_atlas_ctrl_leiden)
-        #                 OT_query2atlas, OTloss_query2atlas = ot_naive(
-        #                     latent_z_query_ctrl_leiden,
-        #                     latent_z_atlas_ctrl_leiden,
-        #                 )
-        #                 delta_query_leiden_list.append(
-        #                     (OT_query2atlas / np.sum(OT_query2atlas, axis = 1)[: , None])
-        #                     @ adata_atlas_ctrl_leiden.obsm['delta']
-        #                 )
-        #                 OTloss_list.append(OTloss_query2atlas)
-        #             OTloss_mtx = np.array(OTloss_list)
-        #             delta_query_weight = (np.exp(-OTloss_mtx) / np.sum(np.exp(-OTloss_mtx))).tolist()
-        #             delta_query_leiden = np.zeros(delta_query_leiden_list[0].shape)
-        #             for i in range(len(delta_query_leiden_list)):
-        #                 delta_query_leiden += delta_query_leiden_list[i] * delta_query_weight[i]
-        #             adata_query_ctrl_leiden.obsm['delta'] = delta_query_leiden
-        #             latent_z_query_pred_leiden = latent_z_query_ctrl_leiden + delta_query_leiden
-        #             adata_X_query_pred_leiden = (
-        #                 self.module.generate(torch.Tensor(latent_z_query_pred_leiden)).cpu().detach().numpy()
-        #             )
-        #             adata_query_pred_leiden = ad.AnnData(
-        #                 X = adata_X_query_pred_leiden,
-        #                 obs = adata_query_ctrl_leiden.obs.copy(),
-        #                 var = adata_query_ctrl_leiden.var.copy(),
-        #                 obsm = adata_query_ctrl_leiden.obsm.copy(),
-        #             )
-        #             adata_query_pred_list.append(adata_query_pred_leiden)
+            sc.tl.leiden(adata_query_ctrl)
+            query_leidens = adata_query_ctrl.obs['leiden'].unique().tolist()
+            sc.pp.neighbors(adata_atlas_ctrl, use_rep = 'latent_z')
+            sc.tl.leiden(adata_atlas_ctrl)
+            atlas_leidens = adata_atlas_ctrl.obs['leiden'].unique().tolist()
+            for query_leiden in query_leidens:
+                adata_query_leiden_ctrl = adata_query_ctrl[
+                    adata_query_ctrl.obs['leiden'] == query_leiden
+                ].copy()
+                _, _, latent_z_query_leiden_ctrl = self.get_latent_representation(
+                    adata_query_leiden_ctrl
+                )
+                delta_query_leiden_list = []
+                OTloss_list = []
+                for atlas_leiden in atlas_leidens:
+                    adata_atlas_leiden_ctrl = adata_atlas_ctrl[
+                        adata_atlas_ctrl.obs['leiden'] == atlas_leiden
+                    ].copy()
+                    transported_delta, matching_loss = (
+                        transfer_delta_and_matching_loss(
+                            latent_z_query=(
+                                latent_z_query_leiden_ctrl
+                            ),
+                            adata_reference_group=(
+                                adata_atlas_leiden_ctrl
+                            ),
+                        )
+                    )
+
+                    delta_query_leiden_list.append(
+                        transported_delta
+                    )
+
+                    OTloss_list.append(
+                        matching_loss
+                    )
+                n_atlas_leidens = len(delta_query_leiden_list)
+
+                if n_atlas_leidens == 0:
+                    raise ValueError(
+                        'No atlas Leiden clusters are available for perturbation transfer.'
+                    )
+
+                if use_adaptive_weighting:
+                    OTloss_mtx = np.asarray(
+                        OTloss_list,
+                        dtype=np.float64,
+                    )
+
+                    delta_query_leiden_weight_list = (
+                        np.exp(-OTloss_mtx)
+                        / np.sum(np.exp(-OTloss_mtx))
+                    )
+                else:
+                    # Ablation: every atlas Leiden cluster contributes equally.
+                    delta_query_leiden_weight_list = np.full(
+                        n_atlas_leidens,
+                        1.0 / n_atlas_leidens,
+                        dtype=np.float64,
+                    )
+
+                delta_query_leiden = np.zeros_like(
+                    delta_query_leiden_list[0],
+                    dtype=np.float64,
+                )
+
+                for delta_i, weight_i in zip(
+                    delta_query_leiden_list,
+                    delta_query_leiden_weight_list,
+                ):
+                    delta_query_leiden += delta_i * weight_i
+                adata_query_leiden_ctrl.obsm['delta'] = delta_query_leiden
+                latent_z_query_leiden_pred = latent_z_query_leiden_ctrl + delta_query_leiden
+                adata_X_query_leiden_pred = (
+                    self.module.generate(torch.Tensor(latent_z_query_leiden_pred)).cpu().detach().numpy()
+                )
+                adata_query_leiden_pred = ad.AnnData(
+                    X = adata_X_query_leiden_pred,
+                    obs = adata_query_leiden_ctrl.obs.copy(),
+                    var = adata_query_leiden_ctrl.var.copy(),
+                    obsm = adata_query_leiden_ctrl.obsm.copy(),
+                )
+                adata_query_pred_list.append(adata_query_leiden_pred)
+        else:
+            query_cov_classes = sorted(adata_query_ctrl.obs[cov_key].unique().tolist())
+            for query_cov_cls in query_cov_classes:
+                adata_atlas_same_cov_ctrl = adata_atlas_ctrl[
+                    adata_atlas_ctrl.obs[cov_key] == query_cov_cls
+                ].copy()
+                sc.pp.neighbors(adata_atlas_same_cov_ctrl, use_rep = 'latent_z')
+                sc.tl.leiden(adata_atlas_same_cov_ctrl)
+                atlas_same_cov_leidens = adata_atlas_same_cov_ctrl.obs['leiden'].unique().tolist()
+                adata_atlas_diff_cov_ctrl = adata_atlas_ctrl[
+                    adata_atlas_ctrl.obs[cov_key] != query_cov_cls
+                ].copy()
+                sc.pp.neighbors(adata_atlas_diff_cov_ctrl, use_rep = 'latent_z')
+                sc.tl.leiden(adata_atlas_diff_cov_ctrl)
+                atlas_diff_cov_leidens = adata_atlas_diff_cov_ctrl.obs['leiden'].unique().tolist()
+                adata_query_cov_ctrl = adata_query_ctrl[
+                    adata_query_ctrl.obs[cov_key] == query_cov_cls
+                ].copy()
+                sc.pp.neighbors(adata_query_cov_ctrl, use_rep = 'latent_z')
+                sc.tl.leiden(adata_query_cov_ctrl)
+                query_cov_leidens = adata_query_cov_ctrl.obs['leiden'].unique().tolist()
+                for query_cov_leiden in query_cov_leidens:
+                    adata_query_cov_leiden_ctrl = adata_query_cov_ctrl[
+                        adata_query_cov_ctrl.obs['leiden'] == query_cov_leiden
+                    ].copy()
+                    _, _, latent_z_query_cov_leiden_ctrl = self.get_latent_representation(
+                        adata_query_cov_leiden_ctrl
+                    )
+                    delta_query_cov_leiden_list = []
+                    OTloss_list = []
+                    for atlas_same_cov_leiden in atlas_same_cov_leidens:
+                        adata_atlas_same_cov_leiden_ctrl = adata_atlas_same_cov_ctrl[
+                            adata_atlas_same_cov_ctrl.obs['leiden'] == atlas_same_cov_leiden
+                        ].copy()
+                        transported_delta, matching_loss = (
+                            transfer_delta_and_matching_loss(
+                                latent_z_query=(
+                                    latent_z_query_cov_leiden_ctrl
+                                ),
+                                adata_reference_group=(
+                                    adata_atlas_same_cov_leiden_ctrl
+                                ),
+                            )
+                        )
+
+                        delta_query_cov_leiden_list.append(
+                            transported_delta
+                        )
+
+                        OTloss_list.append(
+                            matching_loss
+                        )
+                    n_same_cov_leidens = len(
+                        delta_query_cov_leiden_list
+                    )
+
+                    if n_same_cov_leidens == 0:
+                        raise ValueError(
+                            'No same-covariate atlas Leiden clusters are available.'
+                        )
+
+                    if use_adaptive_weighting:
+                        OTloss_mtx = np.asarray(
+                            OTloss_list,
+                            dtype=np.float64,
+                        )
+
+                        delta_query_cov_leiden_weight_list = (
+                            np.exp(-OTloss_mtx)
+                            / np.sum(np.exp(-OTloss_mtx))
+                        )
+                    else:
+                        # Ablation: uniform weighting within the same-covariate group.
+                        delta_query_cov_leiden_weight_list = np.full(
+                            n_same_cov_leidens,
+                            1.0 / n_same_cov_leidens,
+                            dtype=np.float64,
+                        )
+
+                    delta_query_cov_leiden = np.zeros_like(
+                        delta_query_cov_leiden_list[0],
+                        dtype=np.float64,
+                    )
+
+                    for delta_i, weight_i in zip(
+                        delta_query_cov_leiden_list,
+                        delta_query_cov_leiden_weight_list,
+                    ):
+                        delta_query_cov_leiden += (
+                            delta_i
+                            * weight_i
+                            * cov_weight
+                        )
+                    
+                    delta_query_cov_leiden_list = []
+                    OTloss_list = []
+                    for atlas_diff_cov_leiden in atlas_diff_cov_leidens:
+                        adata_atlas_diff_cov_leiden_ctrl = adata_atlas_diff_cov_ctrl[
+                            adata_atlas_diff_cov_ctrl.obs['leiden'] == atlas_diff_cov_leiden
+                        ].copy()
+                        transported_delta, matching_loss = (
+                            transfer_delta_and_matching_loss(
+                                latent_z_query=(
+                                    latent_z_query_cov_leiden_ctrl
+                                ),
+                                adata_reference_group=(
+                                    adata_atlas_diff_cov_leiden_ctrl
+                                ),
+                            )
+                        )
+
+                        delta_query_cov_leiden_list.append(
+                            transported_delta
+                        )
+
+                        OTloss_list.append(
+                            matching_loss
+                        )
+                    n_diff_cov_leidens = len(
+                        delta_query_cov_leiden_list
+                    )
+
+                    if n_diff_cov_leidens == 0:
+                        raise ValueError(
+                            'No different-covariate atlas Leiden clusters are available.'
+                        )
+
+                    if use_adaptive_weighting:
+                        OTloss_mtx = np.asarray(
+                            OTloss_list,
+                            dtype=np.float64,
+                        )
+
+                        delta_query_cov_leiden_weight_list = (
+                            np.exp(-OTloss_mtx)
+                            / np.sum(np.exp(-OTloss_mtx))
+                        )
+                    else:
+                        # Ablation: uniform weighting within the different-covariate group.
+                        delta_query_cov_leiden_weight_list = np.full(
+                            n_diff_cov_leidens,
+                            1.0 / n_diff_cov_leidens,
+                            dtype=np.float64,
+                        )
+
+                    for delta_i, weight_i in zip(
+                        delta_query_cov_leiden_list,
+                        delta_query_cov_leiden_weight_list,
+                    ):
+                        delta_query_cov_leiden += (
+                            delta_i
+                            * weight_i
+                            * (1.0 - cov_weight)
+                        )
+
+                    adata_query_cov_leiden_ctrl.obsm['delta'] = delta_query_cov_leiden
+                    latent_z_query_cov_leiden_pred = latent_z_query_cov_leiden_ctrl + delta_query_cov_leiden
+                    adata_X_query_cov_leiden_pred = (
+                        self.module.generate(torch.Tensor(latent_z_query_cov_leiden_pred)).cpu().detach().numpy()
+                    )
+                    adata_query_cov_leiden_pred = ad.AnnData(
+                        X = adata_X_query_cov_leiden_pred,
+                        obs = adata_query_cov_leiden_ctrl.obs.copy(),
+                        var = adata_query_cov_leiden_ctrl.var.copy(),
+                        obsm = adata_query_cov_leiden_ctrl.obsm.copy(),
+                    )
+                    adata_query_pred_list.append(adata_query_cov_leiden_pred)  
+                    
         adata_query_pred = ad.concat(adata_query_pred_list)
         return adata_query_pred, adata_query_pred.obsm['delta']
     @staticmethod
@@ -652,8 +1249,6 @@ class EGD_model:
                 adata = ad.read_h5ad(adata_path)
             else:
                 raise ValueError('Save path contains no saved anndata and no adata was passed.')
-        else:
-            adata = None
         if not np.array_equal(var_names, adata.var_names.astype(str)):
             raise ValueError('adata.var_names is different from saved var_names of adata used to train the model.')
         init_params = attr_dict.pop('init_params_')
