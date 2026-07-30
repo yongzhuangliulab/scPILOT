@@ -203,6 +203,7 @@ def compute_metrics_for_one_cell_type(
 
 def compute_cell_type_metrics_from_h5ad(
     experiment_name='across_patients',
+    output_tag='all',
     model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
     seeds=(1327, 1337, 1347),
     data_file='pbmc_patients',
@@ -318,7 +319,8 @@ def compute_cell_type_metrics_from_h5ad(
 
     metrics_seed_df = pd.DataFrame(metric_records)
     metrics_seed_df.to_csv(
-        f'../DataFrames/{experiment_name}/cell_type_metrics_seed_level_full.csv',
+        f'../DataFrames/{experiment_name}/'
+        f'cell_type_metrics_seed_level_full_{output_tag}.csv',
         index=False,
     )
 
@@ -329,8 +331,12 @@ def compute_cell_type_metrics_from_h5ad(
 
 def summarize_cell_type_metrics(
     experiment_name='across_patients',
+    output_tag='all',
 ):
-    metrics_path = f'../DataFrames/{experiment_name}/cell_type_metrics_seed_level_full.csv'
+    metrics_path = (
+        f'../DataFrames/{experiment_name}/'
+        f'cell_type_metrics_seed_level_full_{output_tag}.csv'
+    )
     metrics_seed_df = pd.read_csv(metrics_path)
 
     metric_cols = [
@@ -375,7 +381,8 @@ def summarize_cell_type_metrics(
     )
 
     summary.to_csv(
-        f'../DataFrames/{experiment_name}/cell_type_metrics_summary.csv',
+        f'../DataFrames/{experiment_name}/'
+        f'cell_type_metrics_summary_{output_tag}.csv',
         index=False,
     )
 
@@ -384,6 +391,7 @@ def summarize_cell_type_metrics(
 
 def plot_cell_type_metric_heatmaps(
     experiment_name='across_patients',
+    output_tag='all',
     data_file='pbmc_patients',
     model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
     metrics=('r2mean_all', 'r2mean_top50', 'mmd_top50'),
@@ -391,15 +399,16 @@ def plot_cell_type_metric_heatmaps(
     ensure_dirs(f'../Figures/{experiment_name}')
 
     summary = pd.read_csv(
-        f'../DataFrames/{experiment_name}/cell_type_metrics_summary.csv'
+        f'../DataFrames/{experiment_name}/'
+        f'cell_type_metrics_summary_{output_tag}.csv'
     )
 
     model_order = default_model_order(model_names)
 
     metric_labels = {
-        'r2mean_all': r'$R^2_{\mathrm{mean}}$ (all genes)',
-        'r2mean_top50': r'$R^2_{\mathrm{mean}}$ (top 50 DEGs)',
-        'mmd_top50': r'$\mathrm{MMD}$ (top 50 DEGs)',
+        'r2mean_all': r'$R^2_{\mathrm{mean}}$ (↑; all genes)',
+        'r2mean_top50': r'$R^2_{\mathrm{mean}}$ (↑; top 50 DEGs)',
+        'mmd_top50': r'$\mathrm{MMD}^2$ (↓)',
     }
 
     for metric in metrics:
@@ -483,10 +492,13 @@ def plot_result(
 
     if query_key == 'all':
         query_keys = sorted(adata.obs[cell_label_key].astype(str).unique().tolist())
+        output_tag = 'all'
     else:
         query_keys = [str(query_key)]
+        output_tag = str(query_key)
 
     compute_cell_type_metrics_from_h5ad(
+        output_tag=output_tag,
         experiment_name=experiment_name,
         model_names=model_names,
         seeds=seeds,
@@ -503,10 +515,12 @@ def plot_result(
 
     summarize_cell_type_metrics(
         experiment_name=experiment_name,
+        output_tag=output_tag,
     )
 
     plot_cell_type_metric_heatmaps(
         experiment_name=experiment_name,
+        output_tag=output_tag,
         data_file=data_file,
         model_names=model_names,
         metrics=('r2mean_all', 'r2mean_top50', 'mmd_top50'),

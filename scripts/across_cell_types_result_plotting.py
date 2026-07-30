@@ -488,7 +488,7 @@ def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
 def plot_stacked_violins_and_recovery_from_h5ad(
     adata,
     experiment_name='across_cell_types',
-    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
+    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'VAEGAN'),
     seeds=(1327, 1337, 1347),
     data_file='pbmc',
     file_type='.h5ad',
@@ -621,6 +621,72 @@ def plot_stacked_violins_and_recovery_from_h5ad(
                 f'All_models_on_{data_file}_{query_key}_seed{seed}_stacked_violin.jpg'
             )
             plt.close('all')
+
+            extra_violin_genes=('ISG15', 'APOBEC3A')
+            # Additional single-gene violin plots.
+            present_groups = set(
+                adata_query_models.obs[plot_group_key]
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+
+            present_group_order = [
+                group
+                for group in groupby_order
+                if group in present_groups
+            ]
+
+            if str(query_key) == 'FCGR3A+Mono' and seed == 1327:
+                for gene in extra_violin_genes:
+                    if gene not in adata_query_models.var_names:
+                        print(
+                            f'[WARNING] Gene {gene} is not present for '
+                            f'{query_key}, seed={seed}.',
+                            flush=True,
+                        )
+                        continue
+
+                    fig, ax = plt.subplots(
+                        figsize=(9.0, 5.5)
+                    )
+
+                    sc.pl.violin(
+                        adata_query_models,
+                        keys=gene,
+                        groupby=plot_group_key,
+                        order=present_group_order,
+                        rotation=35,
+                        show=False,
+                        ax=ax,
+                    )
+
+                    ax.set_title(
+                        f'{gene}: {query_key}, seed {seed}',
+                        fontsize=16,
+                    )
+
+                    ax.set_xlabel('')
+
+                    ax.set_ylabel(
+                        'Gene expression',
+                        fontsize=16,
+                    )
+
+                    ax.tick_params(
+                        axis='both',
+                        labelsize=16,
+                    )
+
+                    plt.tight_layout()
+
+                    save_figure_jpg_pdf(
+                        f'../Figures/{experiment_name}/'
+                        f'All_models_on_{data_file}_{query_key}_seed{seed}_'
+                        f'{gene}_violin.jpg'
+                    )
+
+                    plt.close(fig)
 
             # Matched quantitative heatmap: recovery score, models x top10 genes.
             heatmap_df = pd.DataFrame(heatmap_records_for_plot)
@@ -1943,7 +2009,7 @@ def plot_metrics_from_csv(
     metric_labels = {
         'r2mean_all': r'$R^2_{\mathrm{mean}}$ (↑; all genes)',
         'r2mean_top50': r'$R^2_{\mathrm{mean}}$ (↑; top 50 DEGs)',
-        'mmd_top50': r'$\mathrm{MMD}$ (↓; top 50 DEGs)',
+        'mmd_top50': r'$\mathrm{MMD}^2$ (↓)',
 
         'l2mean_all': r'$L^2_{\mathrm{mean}}$ (↓; all genes)',
         'l2mean_top50': r'$L^2_{\mathrm{mean}}$ (↓; top 50 DEGs)',
@@ -2094,7 +2160,6 @@ def plot_result(
         plot_stacked_violins_and_recovery_from_h5ad(
             adata=adata,
             experiment_name=experiment_name,
-            model_names=model_names,
             seeds=seeds,
             data_file=data_file,
             file_type=file_type,

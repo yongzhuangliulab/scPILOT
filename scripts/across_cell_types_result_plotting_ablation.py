@@ -14,6 +14,62 @@ from matplotlib import pyplot as plt
 
 
 # -----------------------------------------------------------------------------
+# Ablation configuration
+# -----------------------------------------------------------------------------
+
+REFERENCE_MODEL = 'scPILOT'
+
+DEFAULT_ABLATION_MODELS = (
+    'scPILOT_w_o_discriminator',
+    'scPILOT_w_o_latent_OT',
+    'scPILOT_w_o_Leiden',
+    'scPILOT_w_o_adaptive_weighting',
+    'scPILOT',
+)
+
+ABLATION_MODEL_ORDER = (
+    'scPILOT_w_o_discriminator',
+    'scPILOT_w_o_latent_OT',
+    'scPILOT_w_o_Leiden',
+    'scPILOT_w_o_adaptive_weighting',
+    'scPILOT',
+)
+
+MODEL_CONFIG = {
+    'scPILOT': {
+        'display_name': 'scPILOT',
+        'marker': '*',
+        'marker_size_offset': 1.2,
+        'color': 'C0',
+    },
+    'scPILOT_w_o_discriminator': {
+        'display_name': 'w/o discriminator',
+        'marker': 'X',
+        'marker_size_offset': 0.4,
+        'color': 'C1',
+    },
+    'scPILOT_w_o_latent_OT': {
+        'display_name': 'w/o latent OT',
+        'marker': 'P',
+        'marker_size_offset': 0.3,
+        'color': 'C2',
+    },
+    'scPILOT_w_o_Leiden': {
+        'display_name': 'w/o Leiden',
+        'marker': 'D',
+        'marker_size_offset': 0.2,
+        'color': 'C3',
+    },
+    'scPILOT_w_o_adaptive_weighting': {
+        'display_name': 'w/o adaptive weighting',
+        'marker': 's',
+        'marker_size_offset': 0.2,
+        'color': 'C4',
+    },
+}
+
+
+# -----------------------------------------------------------------------------
 # Basic utilities
 # -----------------------------------------------------------------------------
 
@@ -40,45 +96,79 @@ def get_X(adata_obj, genes=None):
 
 
 def model_display_name(model_name: str) -> str:
-    name_map = {
-        'identity': 'Identity',
-        'biolord': 'Biolord',
-        'CellOT': 'CellOT',
-        'VAEGAN': 'VAEGAN',
-        'scGen': 'scGen',
-        'scPILOT': 'scPILOT',
-    }
-    return name_map.get(model_name, model_name)
-
-
-def obs_value_mask(adata_obj, obs_key, value):
-    """Robust comparison for numeric or string-like sample IDs."""
-    return adata_obj.obs[obs_key].astype(str) == str(value)
+    return MODEL_CONFIG.get(
+        model_name,
+        {},
+    ).get(
+        'display_name',
+        model_name,
+    )
 
 
 def model_marker(model_name: str) -> str:
-    marker_map = {
-        'identity': 'o',   # circle
-        'scGen': 's',      # square
-        'biolord': '^',    # triangle up
-        'CellOT': 'D',     # diamond
-        'VAEGAN': 'P',     # filled plus
-        'scPILOT': '*',    # star
-    }
-    return marker_map.get(model_name, 'o')
+    return MODEL_CONFIG.get(
+        model_name,
+        {},
+    ).get(
+        'marker',
+        'o',
+    )
 
 
-def model_marker_size(model_name: str, base_size: float = 4.0) -> float:
-    size_map = {
-        'scPILOT': base_size + 1.2,
-        'VAEGAN': base_size + 0.4,
-    }
-    return size_map.get(model_name, base_size)
+def model_marker_size(
+    model_name: str,
+    base_size: float = 4.0,
+) -> float:
+    offset = MODEL_CONFIG.get(
+        model_name,
+        {},
+    ).get(
+        'marker_size_offset',
+        0.0,
+    )
+    return base_size + offset
+
+
+def model_color(model_name: str) -> str:
+    return MODEL_CONFIG.get(
+        model_name,
+        {},
+    ).get(
+        'color',
+        'C7',
+    )
 
 
 def default_model_order(model_names):
-    ordered = ['identity', 'scGen', 'biolord', 'CellOT', 'VAEGAN', 'scPILOT']
-    return [m for m in ordered if m in model_names]
+    """
+    Return configured ablation models in a fixed order.
+
+    Unknown models are appended at the end so that newly added variants
+    can still be plotted before MODEL_CONFIG is updated.
+    """
+    model_names = tuple(model_names)
+
+    configured = [
+        model_name
+        for model_name in ABLATION_MODEL_ORDER
+        if model_name in model_names
+    ]
+
+    additional = [
+        model_name
+        for model_name in model_names
+        if model_name not in ABLATION_MODEL_ORDER
+    ]
+
+    return configured + additional
+
+
+def get_figure_dir(output_name: str) -> str:
+    return f'../Figures/{output_name}'
+
+
+def get_dataframe_dir(output_name: str) -> str:
+    return f'../DataFrames/{output_name}'
 
 
 def mmd_distance(x, y, gamma):
@@ -142,17 +232,13 @@ def load_prediction_h5ad(
 
 def get_top50_genes(adata, query_key, cond_key, stim_key, cell_label_key):
     """Define top50 DEGs once from real control vs stimulated cells."""
-    adata_query = adata[
-        obs_value_mask(adata, cell_label_key, query_key)
-    ].copy()
-
+    adata_query = adata[adata.obs[cell_label_key] == query_key].copy()
     sc.tl.rank_genes_groups(
         adata_query,
         groupby=cond_key,
         method='wilcoxon',
         n_genes=50,
     )
-
     return adata_query.uns['rank_genes_groups']['names'][stim_key].tolist()
 
 
@@ -163,19 +249,20 @@ def get_top50_genes(adata, query_key, cond_key, stim_key, cell_label_key):
 
 def plot_shared_umaps_from_h5ad(
     adata,
-    experiment_name='across_patients',
-    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
+    experiment_name='across_cell_types',
+    output_name='across_cell_types_ablation',
+    model_names=DEFAULT_ABLATION_MODELS,
     seeds=(1327, 1337, 1347),
-    data_file='pbmc_patients',
+    data_file='pbmc',
     file_type='.h5ad',
     cond_key='condition',
-    ctrl_key='ctrl',
-    stim_key='stim',
-    cell_label_key='sample_id',
+    ctrl_key='control',
+    stim_key='stimulated',
+    cell_label_key='cell_type',
     query_keys=None,
     skip_missing=False,
 ):
-    ensure_dirs(f'../Figures/{experiment_name}')
+    ensure_dirs(f'../Figures/{output_name}')
     model_order = default_model_order(model_names)
     query_keys = query_keys or sorted(adata.obs[cell_label_key].unique().tolist())
 
@@ -260,8 +347,8 @@ def plot_shared_umaps_from_h5ad(
                 show=False,
             )
             save_figure_jpg_pdf(
-                f'../Figures/{experiment_name}/'
-                f'All_models_{data_file}_{query_key}_seed{seed}_shared_umap_all_in_one.jpg'
+                f'../Figures/{output_name}/'
+                f'Ablation_{data_file}_{query_key}_seed{seed}_shared_umap_all_in_one.jpg'
             )
             plt.close('all')
 
@@ -320,8 +407,8 @@ def plot_shared_umaps_from_h5ad(
             plt.suptitle(f'{query_key}, seed {seed}', fontsize=20)
             plt.tight_layout()
             save_figure_jpg_pdf(
-                f'../Figures/{experiment_name}/'
-                f'All_models_{data_file}_{query_key}_seed{seed}_shared_umap_panels.jpg'
+                f'../Figures/{output_name}/'
+                f'Ablation_{data_file}_{query_key}_seed{seed}_shared_umap_panels.jpg'
             )
             plt.close('all')
 
@@ -384,7 +471,12 @@ def compute_gene_recovery_records(
     return records
 
 
-def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
+def summarize_recovery_gene_level(
+    gene_df,
+    output_name,
+    model_names,
+    reference_model=REFERENCE_MODEL,
+):
     if gene_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
@@ -410,7 +502,7 @@ def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
 
     seed_summary = pd.DataFrame(summary_records)
     seed_summary.to_csv(
-        f'../DataFrames/{experiment_name}/topdeg_summary_recovery_seed_level.csv',
+        f'../DataFrames/{output_name}/topdeg_summary_recovery_seed_level.csv',
         index=False,
     )
 
@@ -439,28 +531,37 @@ def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
         suffixes=('_mean', '_sd'),
     )
     query_summary.to_csv(
-        f'../DataFrames/{experiment_name}/topdeg_summary_recovery_query_level.csv',
+        f'../DataFrames/{output_name}/topdeg_summary_recovery_query_level.csv',
         index=False,
     )
 
     # Paired two-sided Wilcoxon on seven query-level seed averages.
     wilcoxon_records = []
-    baselines = [m for m in model_names if m != 'scPILOT']
+    variants = [
+        model_name
+        for model_name in model_names
+        if model_name != reference_model
+    ]
     for metric in metric_cols:
         metric_query_col = f'{metric}_mean'
         pivot = query_summary.pivot(index='query_key', columns='model', values=metric_query_col)
-        if 'scPILOT' not in pivot.columns:
+        if reference_model not in pivot.columns:
             continue
-        for baseline in baselines:
-            if baseline not in pivot.columns:
+
+        for variant_model in variants:
+            if variant_model not in pivot.columns:
                 continue
-            paired = pivot[['scPILOT', baseline]].dropna()
-            if paired.shape[0] == 0:
+
+            paired = pivot[
+                [reference_model, variant_model]
+            ].dropna()
+
+            if paired.shape[0] < 2:
                 continue
             try:
                 res = stats.wilcoxon(
-                    paired['scPILOT'],
-                    paired[baseline],
+                    paired[reference_model],
+                    paired[variant_model],
                     alternative='two-sided',
                 )
                 statistic = res.statistic
@@ -469,17 +570,17 @@ def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
                 statistic = np.nan
                 pvalue = np.nan
 
-            scpilot_mean = paired['scPILOT'].mean()
-            baseline_mean = paired[baseline].mean()
-            raw_difference = scpilot_mean - baseline_mean
+            reference_mean = paired[reference_model].mean()
+            variant_mean = paired[variant_model].mean()
+            raw_difference = reference_mean - variant_mean
             wilcoxon_records.append({
                 'metric': metric,
-                'baseline': baseline,
+                'reference_model': reference_model,
+                'variant_model': variant_model,
                 'n_query_keys': paired.shape[0],
-                'scPILOT_mean': scpilot_mean,
-                'baseline_mean': baseline_mean,
-                'raw_difference_scPILOT_minus_baseline': raw_difference,
-                'advantage_for_scPILOT': raw_difference,
+                'reference_mean': reference_mean,
+                'variant_mean': variant_mean,
+                'raw_difference_reference_minus_variant': raw_difference,
                 'better_direction': 'higher',
                 'wilcoxon_statistic': statistic,
                 'pvalue_two_sided': pvalue,
@@ -487,7 +588,7 @@ def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
 
     recovery_wilcoxon = pd.DataFrame(wilcoxon_records)
     recovery_wilcoxon.to_csv(
-        f'../DataFrames/{experiment_name}/topdeg_recovery_wilcoxon_scPILOT_vs_baselines.csv',
+        f'../DataFrames/{output_name}/topdeg_recovery_wilcoxon_reference_vs_ablation.csv',
         index=False,
     )
 
@@ -496,19 +597,23 @@ def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
 
 def plot_stacked_violins_and_recovery_from_h5ad(
     adata,
-    experiment_name='across_patients',
-    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'VAEGAN'),
+    experiment_name='across_cell_types',
+    output_name='across_cell_types_ablation',
+    model_names=DEFAULT_ABLATION_MODELS,
     seeds=(1327, 1337, 1347),
-    data_file='pbmc_patients',
+    data_file='pbmc',
     file_type='.h5ad',
     cond_key='condition',
-    ctrl_key='ctrl',
-    stim_key='stim',
-    cell_label_key='sample_id',
+    ctrl_key='control',
+    stim_key='stimulated',
+    cell_label_key='cell_type',
     query_keys=None,
     skip_missing=False,
 ):
-    ensure_dirs(f'../Figures/{experiment_name}', f'../DataFrames/{experiment_name}')
+    ensure_dirs(
+        f'../Figures/{output_name}',
+        f'../DataFrames/{output_name}',
+    )
     model_order = default_model_order(model_names)
     query_keys = query_keys or sorted(adata.obs[cell_label_key].unique().tolist())
 
@@ -626,76 +731,10 @@ def plot_stacked_violins_and_recovery_from_h5ad(
             plt.suptitle(f'{query_key}, seed {seed}', fontsize=16, x=0.45, y=0.8)
             plt.tight_layout()
             save_figure_jpg_pdf(
-                f'../Figures/{experiment_name}/'
-                f'All_models_on_{data_file}_{query_key}_seed{seed}_stacked_violin.jpg'
+                f'../Figures/{output_name}/'
+                f'Ablation_{data_file}_{query_key}_seed{seed}_stacked_violin.jpg'
             )
             plt.close('all')
-
-            extra_violin_genes=('APOBEC3A', 'CXCL11')
-            # Additional single-gene violin plots.
-            present_groups = set(
-                adata_query_models.obs[plot_group_key]
-                .astype(str)
-                .unique()
-                .tolist()
-            )
-
-            present_group_order = [
-                group
-                for group in groupby_order
-                if group in present_groups
-            ]
-
-            if str(query_key) == '101' and seed == 1327:
-                for gene in extra_violin_genes:
-                    if gene not in adata_query_models.var_names:
-                        print(
-                            f'[WARNING] Gene {gene} is not present for '
-                            f'{query_key}, seed={seed}.',
-                            flush=True,
-                        )
-                        continue
-
-                    fig, ax = plt.subplots(
-                        figsize=(9.0, 5.5)
-                    )
-
-                    sc.pl.violin(
-                        adata_query_models,
-                        keys=gene,
-                        groupby=plot_group_key,
-                        order=present_group_order,
-                        rotation=35,
-                        show=False,
-                        ax=ax,
-                    )
-
-                    ax.set_title(
-                        f'{gene}: {query_key}, seed {seed}',
-                        fontsize=16,
-                    )
-
-                    ax.set_xlabel('')
-
-                    ax.set_ylabel(
-                        'Gene expression',
-                        fontsize=16,
-                    )
-
-                    ax.tick_params(
-                        axis='both',
-                        labelsize=16,
-                    )
-
-                    plt.tight_layout()
-
-                    save_figure_jpg_pdf(
-                        f'../Figures/{experiment_name}/'
-                        f'All_models_on_{data_file}_{query_key}_seed{seed}_'
-                        f'{gene}_violin.jpg'
-                    )
-
-                    plt.close(fig)
 
             # Matched quantitative heatmap: recovery score, models x top10 genes.
             heatmap_df = pd.DataFrame(heatmap_records_for_plot)
@@ -730,8 +769,8 @@ def plot_stacked_violins_and_recovery_from_h5ad(
                 plt.title(f'{query_key}, seed {seed}')
                 plt.tight_layout()
                 save_figure_jpg_pdf(
-                    f'../Figures/{experiment_name}/'
-                    f'All_models_on_{data_file}_{query_key}_seed{seed}_top10_deg_recovery_heatmap.jpg'
+                    f'../Figures/{output_name}/'
+                    f'Ablation_{data_file}_{query_key}_seed{seed}_top10_deg_recovery_heatmap.jpg'
                 )
                 plt.close('all')
 
@@ -743,10 +782,15 @@ def plot_stacked_violins_and_recovery_from_h5ad(
 
     gene_df = pd.DataFrame(gene_level_records)
     gene_df.to_csv(
-        f'../DataFrames/{experiment_name}/topdeg_gene_level_recovery.csv',
+        f'../DataFrames/{output_name}/topdeg_gene_level_recovery.csv',
         index=False,
     )
-    summarize_recovery_gene_level(gene_df, experiment_name, model_names)
+    summarize_recovery_gene_level(
+        gene_df=gene_df,
+        output_name=output_name,
+        model_names=model_names,
+        reference_model=REFERENCE_MODEL,
+    )
     return gene_df
 
 
@@ -779,18 +823,21 @@ def compute_full_metrics_for_one_result(adata_query_pred, adata_query_stim, top5
 
 def compute_metrics_from_h5ad(
     adata,
-    experiment_name='across_patients',
-    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
+    experiment_name='across_cell_types',
+    output_name='across_cell_types_ablation',
+    model_names=DEFAULT_ABLATION_MODELS,
     seeds=(1327, 1337, 1347),
-    data_file='pbmc_patients',
+    data_file='pbmc',
     file_type='.h5ad',
     cond_key='condition',
-    stim_key='stim',
-    cell_label_key='sample_id',
+    stim_key='stimulated',
+    cell_label_key='cell_type',
     query_keys=None,
     skip_missing=False,
 ):
-    ensure_dirs(f'../DataFrames/{experiment_name}')
+    dataframe_dir = get_dataframe_dir(output_name)
+    ensure_dirs(dataframe_dir)
+
     model_order = default_model_order(model_names)
     query_keys = query_keys or sorted(adata.obs[cell_label_key].unique().tolist())
     gammas = np.logspace(1, -3, num=50)
@@ -834,6 +881,7 @@ def compute_metrics_from_h5ad(
                 )
 
                 metric_records.append({
+                    'analysis': output_name,
                     'experiment': experiment_name,
                     'data_file': data_file,
                     'query_key': query_key,
@@ -844,20 +892,45 @@ def compute_metrics_from_h5ad(
                 })
 
     metrics_seed_df = pd.DataFrame(metric_records)
+
+    metrics_path = (
+        f'{dataframe_dir}/'
+        f'metrics_seed_level_ablation.csv'
+    )
+
     metrics_seed_df.to_csv(
-        f'../DataFrames/{experiment_name}/metrics_seed_level_full.csv',
+        metrics_path,
         index=False,
     )
+
+    print(f'Metrics saved to: {metrics_path}', flush=True)
     print(metrics_seed_df.groupby('model').size(), flush=True)
+
     return metrics_seed_df
 
 
 def summarize_metrics_from_csv(
-    experiment_name='across_patients',
-    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
+    output_name='across_cell_types_ablation',
+    model_names=DEFAULT_ABLATION_MODELS,
 ):
-    metrics_path = f'../DataFrames/{experiment_name}/metrics_seed_level_full.csv'
+    dataframe_dir = get_dataframe_dir(output_name)
+
+    metrics_path = (
+        f'{dataframe_dir}/'
+        f'metrics_seed_level_ablation.csv'
+    )
+
     metrics_seed_df = pd.read_csv(metrics_path)
+
+    metrics_seed_df = metrics_seed_df[
+        metrics_seed_df['model'].isin(model_names)
+    ].copy()
+
+    if metrics_seed_df.empty:
+        raise ValueError(
+            'No metric records remain after filtering by model_names: '
+            f'{model_names}'
+        )
 
     metric_cols = [
         'r2mean_all',
@@ -871,27 +944,46 @@ def summarize_metrics_from_csv(
         'mmd_top50',
     ]
 
+    group_cols = [
+        'analysis',
+        'experiment',
+        'data_file',
+        'query_key',
+        'model',
+        'model_display',
+    ]
+
     query_mean = (
         metrics_seed_df
-        .groupby(['experiment', 'data_file', 'query_key', 'model', 'model_display'])[metric_cols]
+        .groupby(group_cols)[metric_cols]
         .mean()
         .reset_index()
     )
+
     query_sd = (
         metrics_seed_df
-        .groupby(['experiment', 'data_file', 'query_key', 'model', 'model_display'])[metric_cols]
+        .groupby(group_cols)[metric_cols]
         .std()
         .reset_index()
     )
+
     query_summary = query_mean.merge(
         query_sd,
-        on=['experiment', 'data_file', 'query_key', 'model', 'model_display'],
+        on=group_cols,
         suffixes=('_mean', '_sd'),
     )
+
+    summary_path = (
+        f'{dataframe_dir}/'
+        f'metrics_query_level_ablation_summary.csv'
+    )
+
     query_summary.to_csv(
-        f'../DataFrames/{experiment_name}/metrics_query_level_summary.csv',
+        summary_path,
         index=False,
     )
+
+    print(f'Summary saved to: {summary_path}', flush=True)
 
     return metrics_seed_df, query_summary
 
@@ -929,12 +1021,18 @@ def format_test_annotation(pvalue):
     return f'p={pvalue:.4f}'
 
 
-def paired_test_scpilot_vs_baseline(query_summary, metric, baseline, test_name):
+def paired_test_reference_vs_variant(
+    query_summary,
+    metric,
+    variant_model,
+    test_name='wilcoxon',
+    reference_model=REFERENCE_MODEL,
+):
     """
-    Compare scPILOT against one baseline using paired held-out split means.
+    Compare the complete model with one ablation variant.
 
-    Each paired sample is one held-out cell type.
-    The value for each held-out cell type is the average across three seeds.
+    Each paired observation is one held-out cell type.
+    Values are first averaged across model seeds within each cell type.
     """
     mean_col = f'{metric}_mean'
 
@@ -944,39 +1042,53 @@ def paired_test_scpilot_vs_baseline(query_summary, metric, baseline, test_name):
         values=mean_col,
     )
 
-    if 'scPILOT' not in pivot.columns or baseline not in pivot.columns:
+    required_models = {
+        reference_model,
+        variant_model,
+    }
+
+    if not required_models.issubset(pivot.columns):
         return np.nan, np.nan, 0
 
-    paired = pivot[['scPILOT', baseline]].dropna()
+    paired = pivot[
+        [reference_model, variant_model]
+    ].dropna()
+
     n_pairs = paired.shape[0]
 
     if n_pairs < 2:
         return np.nan, np.nan, n_pairs
 
-    x = paired['scPILOT'].values.astype(float)
-    y = paired[baseline].values.astype(float)
+    reference_values = paired[
+        reference_model
+    ].values.astype(float)
+
+    variant_values = paired[
+        variant_model
+    ].values.astype(float)
 
     try:
         if test_name == 'wilcoxon':
-            res = stats.wilcoxon(
-                x,
-                y,
+            result = stats.wilcoxon(
+                reference_values,
+                variant_values,
                 alternative='two-sided',
             )
-            statistic = float(res.statistic)
-            pvalue = float(res.pvalue)
 
         elif test_name == 'paired_ttest':
-            res = stats.ttest_rel(
-                x,
-                y,
+            result = stats.ttest_rel(
+                reference_values,
+                variant_values,
                 nan_policy='omit',
             )
-            statistic = float(res.statistic)
-            pvalue = float(res.pvalue)
 
         else:
-            raise ValueError(f'Unknown test_name: {test_name}')
+            raise ValueError(
+                f'Unknown test_name: {test_name}'
+            )
+
+        statistic = float(result.statistic)
+        pvalue = float(result.pvalue)
 
     except ValueError:
         statistic = np.nan
@@ -988,7 +1100,7 @@ def paired_test_scpilot_vs_baseline(query_summary, metric, baseline, test_name):
 def summarize_worst_case_performance(
     query_summary,
     metrics,
-    experiment_name,
+    output_name,
     data_file,
     model_order,
 ):
@@ -1035,7 +1147,7 @@ def summarize_worst_case_performance(
             value_array = values.values.astype(float)
 
             records.append({
-                'experiment': experiment_name,
+                'experiment': output_name,
                 'data_file': data_file,
                 'metric': metric,
                 'model': model_name,
@@ -1055,7 +1167,7 @@ def summarize_worst_case_performance(
 
     worst_df = pd.DataFrame(records)
     worst_df.to_csv(
-        f'../DataFrames/{experiment_name}/metrics_worst_case_summary.csv',
+        f'../DataFrames/{output_name}/metrics_worst_case_summary.csv',
         index=False,
     )
 
@@ -1066,7 +1178,7 @@ def plot_worst_case_performance_combined(
     worst_df,
     metrics,
     metric_labels,
-    experiment_name,
+    output_name,
     data_file,
     model_order,
     annotate_worst_split=True,
@@ -1092,10 +1204,9 @@ def plot_worst_case_performance_combined(
     plot_order = model_order
     y_positions = np.arange(len(plot_order))
 
-    color_cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
     model_colors = {
-        model_name: color_cycle[i % len(color_cycle)]
-        for i, model_name in enumerate(plot_order)
+        model_name: model_color(model_name)
+        for model_name in plot_order
     }
 
     fig, axes = plt.subplots(
@@ -1223,32 +1334,31 @@ def plot_worst_case_performance_combined(
 
                 # Default rule from the previous version:
                 # put the query key centered below the worst-case point;
-                # identity is placed right-above
+                # identity is placed above because it is at the bottom.
                 text_x = worst_value
                 text_y = y_pos - dy
                 ha = 'center'
                 va = 'top'
 
                 if model_name == 'identity':
-                    text_x = worst_value + dx
                     text_y = y_pos + dy
                     va = 'bottom'
 
                 # For R2mean panels:
-                # identity, scGen and VAEGAN keep the default placement;
+                # CellOT and identity keep the default placement;
                 # all other models are labeled on the left side of the point.
                 if metric in ['r2mean_all', 'r2mean_top50']:
-                    if model_name not in ['identity', 'scGen', 'VAEGAN']:
+                    if model_name not in ['CellOT', 'identity']:
                         text_x = worst_value - dx
                         text_y = y_pos
                         ha = 'right'
                         va = 'center'
 
                 # For MMD panel:
-                # CellOT and scPILOT is labeled on the right side of the point;
+                # scPILOT is labeled on the right side of the point;
                 # all other models keep the default placement.
                 elif metric == 'mmd_top50':
-                    if model_name in ['CellOT', 'scPILOT']:
+                    if model_name == 'scPILOT':
                         text_x = worst_value + dx
                         text_y = y_pos
                         ha = 'left'
@@ -1390,7 +1500,7 @@ def plot_worst_case_performance_combined(
     )
 
     fig.suptitle(
-        'Mean and worst-case performance across held-out patients',
+        'Mean and worst-case performance across held-out cell types',
         fontsize=16,
         x=0.4,
         y=1.03,
@@ -1398,8 +1508,8 @@ def plot_worst_case_performance_combined(
 
     plt.tight_layout(rect=[0, 0, 0.86, 0.95])
     save_figure_jpg_pdf(
-        f'../Figures/{experiment_name}/'
-        f'All_models_on_{data_file}_worst_case_performance_combined.jpg'
+        f'../Figures/{output_name}/'
+        f'Ablation_{data_file}_worst_case_performance_combined.jpg'
     )
     plt.close('all')
 
@@ -1463,7 +1573,7 @@ def plot_splitwise_radar_chart(
     seed_df,
     query_summary,
     metric,
-    experiment_name,
+    output_name,
     data_file,
     model_order,
     ylabel,
@@ -1530,15 +1640,20 @@ def plot_splitwise_radar_chart(
         mean_values_closed = np.concatenate([mean_values, [mean_values[0]]])
 
         # Draw the mean radar line.
+        line_color = model_color(model_name)
+
         line, = ax.plot(
             angles_closed,
             mean_values_closed,
             linewidth=2.0,
             marker=marker,
-            markersize=model_marker_size(model_name, base_size=4.2),
+            markersize=model_marker_size(
+                model_name,
+                base_size=4.2,
+            ),
+            color=line_color,
             label=display_name,
         )
-        line_color = line.get_color()
 
         ax.fill(
             angles_closed,
@@ -1626,7 +1741,7 @@ def plot_splitwise_radar_chart(
                 )
 
     ax.set_title(
-        f'{ylabel}\nHeld-out patient',
+        f'{ylabel}\nHeld-out cell type',
         fontsize=15,
         pad=24,
     )
@@ -1642,8 +1757,8 @@ def plot_splitwise_radar_chart(
 
     plt.tight_layout()
     save_figure_jpg_pdf(
-        f'../Figures/{experiment_name}/'
-        f'All_models_on_{data_file}_splitwise_radar_{metric}.jpg'
+        f'../Figures/{output_name}/'
+        f'Ablation_{data_file}_splitwise_radar_{metric}.jpg'
     )
     plt.close('all')
 
@@ -1652,7 +1767,7 @@ def plot_splitwise_line_chart(
     seed_df,
     query_summary,
     metric,
-    experiment_name,
+    output_name,
     data_file,
     model_order,
     ylabel,
@@ -1699,6 +1814,7 @@ def plot_splitwise_line_chart(
         # Draw the mean line.
         x_model = x
 
+        line_color = model_color(model_name)
         line, = ax.plot(
             x_model,
             mean_values,
@@ -1706,11 +1822,11 @@ def plot_splitwise_line_chart(
             marker=marker,
             markersize=model_marker_size(model_name, base_size=3.8),
             markeredgewidth=0.0,
+            color=line_color,
             label=display_name,
             zorder=5,
         )
 
-        line_color = line.get_color()
         line.set_markerfacecolor(line_color)
         line.set_markeredgecolor(line_color)
 
@@ -1794,7 +1910,7 @@ def plot_splitwise_line_chart(
     ax.set_yticklabels([format_radar_tick(t) for t in yticks], fontsize=10)
 
     ax.set_ylabel(ylabel, fontsize=12)
-    ax.set_xlabel('Held-out patient', fontsize=12)
+    ax.set_xlabel('Held-out cell type', fontsize=12)
 
     ax.grid(True, axis='y', linewidth=0.8, alpha=0.45)
     ax.spines['top'].set_visible(False)
@@ -1811,8 +1927,8 @@ def plot_splitwise_line_chart(
 
     plt.tight_layout()
     save_figure_jpg_pdf(
-        f'../Figures/{experiment_name}/'
-        f'All_models_on_{data_file}_splitwise_line_{metric}.jpg'
+        f'../Figures/{output_name}/'
+        f'Ablation_{data_file}_splitwise_line_{metric}.jpg'
     )
     plt.close('all')
 
@@ -1821,7 +1937,7 @@ def plot_aggregate_boxplot_combined(
     query_summary,
     metrics,
     metric_labels,
-    experiment_name,
+    output_name,
     data_file,
     model_order,
     test_name='wilcoxon',
@@ -1840,10 +1956,9 @@ def plot_aggregate_boxplot_combined(
     plot_order = model_order
     y_positions = np.arange(len(plot_order))
 
-    color_cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
     model_colors = {
-        model_name: color_cycle[i % len(color_cycle)]
-        for i, model_name in enumerate(plot_order)
+        model_name: model_color(model_name)
+        for model_name in plot_order
     }
 
     test_title_map = {
@@ -1954,17 +2069,22 @@ def plot_aggregate_boxplot_combined(
         ax.grid(True, axis='x', linewidth=0.8, alpha=0.35)
         sns.despine(ax=ax, top=True, right=True)
 
-        # Annotate scPILOT-vs-baseline p-values.
-        if 'scPILOT' in plot_order:
-            for y_pos, baseline in zip(y_positions, plot_order):
-                if baseline == 'scPILOT':
+        if REFERENCE_MODEL in plot_order:
+            for y_pos, variant_model in zip(
+                y_positions,
+                plot_order,
+            ):
+                if variant_model == REFERENCE_MODEL:
                     continue
 
-                statistic, pvalue, n_pairs = paired_test_scpilot_vs_baseline(
-                    query_summary=query_summary,
-                    metric=metric,
-                    baseline=baseline,
-                    test_name=test_name,
+                statistic, pvalue, n_pairs = (
+                    paired_test_reference_vs_variant(
+                        query_summary=query_summary,
+                        metric=metric,
+                        variant_model=variant_model,
+                        test_name=test_name,
+                        reference_model=REFERENCE_MODEL,
+                    )
                 )
 
                 ax.text(
@@ -1989,30 +2109,37 @@ def plot_aggregate_boxplot_combined(
     axes[0].set_ylabel('Model', fontsize=12)
 
     fig.suptitle(
-        f'Aggregate performance across held-out patients ({test_title})',
+        f'Aggregate performance across held-out cell types ({test_title})',
         fontsize=15,
         y=1.03,
     )
 
     plt.tight_layout()
     save_figure_jpg_pdf(
-        f'../Figures/{experiment_name}/'
-        f'All_models_on_{data_file}_aggregate_boxplot_combined_{test_name}.jpg'
+        f'../Figures/{output_name}/'
+        f'Ablation_{data_file}_aggregate_boxplot_combined_{test_name}.jpg'
     )
     plt.close('all')
 
 
 def plot_metrics_from_csv(
-    experiment_name='across_patients',
-    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
-    data_file='pbmc_patients',
+    output_name='across_cell_types_ablation',
+    model_names=DEFAULT_ABLATION_MODELS,
+    data_file='pbmc',
 ):
-    ensure_dirs(f'../Figures/{experiment_name}')
+    dataframe_dir = get_dataframe_dir(output_name)
+    figure_dir = get_figure_dir(output_name)
+
+    ensure_dirs(figure_dir)
+
     seed_df = pd.read_csv(
-        f'../DataFrames/{experiment_name}/metrics_seed_level_full.csv'
+        f'{dataframe_dir}/'
+        f'metrics_seed_level_ablation.csv'
     )
+
     query_summary = pd.read_csv(
-        f'../DataFrames/{experiment_name}/metrics_query_level_summary.csv'
+        f'{dataframe_dir}/'
+        f'metrics_query_level_ablation_summary.csv'
     )
 
     model_order = default_model_order(model_names)
@@ -2047,7 +2174,7 @@ def plot_metrics_from_csv(
             seed_df=seed_df,
             query_summary=query_summary,
             metric=metric,
-            experiment_name=experiment_name,
+            output_name=output_name,
             data_file=data_file,
             model_order=model_order,
             ylabel=metric_labels[metric],
@@ -2061,7 +2188,7 @@ def plot_metrics_from_csv(
             seed_df=seed_df,
             query_summary=query_summary,
             metric=metric,
-            experiment_name=experiment_name,
+            output_name=output_name,
             data_file=data_file,
             model_order=model_order,
             ylabel=metric_labels[metric],
@@ -2075,7 +2202,7 @@ def plot_metrics_from_csv(
         query_summary=query_summary,
         metrics=aggregate_metrics,
         metric_labels=metric_labels,
-        experiment_name=experiment_name,
+        output_name=output_name,
         data_file=data_file,
         model_order=model_order,
         test_name='wilcoxon',
@@ -2085,7 +2212,7 @@ def plot_metrics_from_csv(
         query_summary=query_summary,
         metrics=aggregate_metrics,
         metric_labels=metric_labels,
-        experiment_name=experiment_name,
+        output_name=output_name,
         data_file=data_file,
         model_order=model_order,
         test_name='paired_ttest',
@@ -2094,7 +2221,7 @@ def plot_metrics_from_csv(
     worst_df = summarize_worst_case_performance(
         query_summary=query_summary,
         metrics=aggregate_metrics,
-        experiment_name=experiment_name,
+        output_name=output_name,
         data_file=data_file,
         model_order=model_order,
     )
@@ -2103,7 +2230,7 @@ def plot_metrics_from_csv(
         worst_df=worst_df,
         metrics=aggregate_metrics,
         metric_labels=metric_labels,
-        experiment_name=experiment_name,
+        output_name=output_name,
         data_file=data_file,
         model_order=model_order,
         annotate_worst_split=True,
@@ -2116,23 +2243,27 @@ def plot_metrics_from_csv(
 
 
 def plot_result(
-    experiment_name='across_patients',
-    model_names=('scPILOT', 'scGen', 'CellOT', 'biolord', 'identity', 'VAEGAN'),
+    experiment_name='across_cell_types',
+    output_name='across_cell_types_ablation',
+    model_names=DEFAULT_ABLATION_MODELS,
     seeds=(1327, 1337, 1347),
-    data_file='pbmc_patients',
+    data_file='pbmc',
     file_type='.h5ad',
     cond_key='condition',
-    ctrl_key='ctrl',
-    stim_key='stim',
-    cell_label_key='sample_id',
+    ctrl_key='control',
+    stim_key='stimulated',
+    cell_label_key='cell_type',
     query_key='all',
     steps='all',
     skip_missing=False,
 ):
     sns.set_theme(style='white', font='Arial', font_scale=1.4)
+    figure_dir = get_figure_dir(output_name)
+    dataframe_dir = get_dataframe_dir(output_name)
+
     ensure_dirs(
-        f'../Figures/{experiment_name}',
-        f'../DataFrames/{experiment_name}',
+        figure_dir,
+        dataframe_dir,
     )
 
     adata = sc.read_h5ad(f'../Data/{experiment_name}/{data_file}{file_type}')
@@ -2141,9 +2272,9 @@ def plot_result(
     print(adata)
 
     if query_key == 'all':
-        query_keys = sorted(adata.obs[cell_label_key].astype(str).unique().tolist())
+        query_keys = sorted(adata.obs[cell_label_key].unique().tolist())
     else:
-        query_keys = [str(query_key)]
+        query_keys = [query_key]
 
     if steps == 'all':
         step_set = {'umap', 'violin', 'metrics', 'summary', 'barplots'}
@@ -2154,6 +2285,7 @@ def plot_result(
         plot_shared_umaps_from_h5ad(
             adata=adata,
             experiment_name=experiment_name,
+            output_name=output_name,
             model_names=model_names,
             seeds=seeds,
             data_file=data_file,
@@ -2170,6 +2302,8 @@ def plot_result(
         plot_stacked_violins_and_recovery_from_h5ad(
             adata=adata,
             experiment_name=experiment_name,
+            output_name=output_name,
+            model_names=model_names,
             seeds=seeds,
             data_file=data_file,
             file_type=file_type,
@@ -2185,6 +2319,7 @@ def plot_result(
         compute_metrics_from_h5ad(
             adata=adata,
             experiment_name=experiment_name,
+            output_name=output_name,
             model_names=model_names,
             seeds=seeds,
             data_file=data_file,
@@ -2198,20 +2333,20 @@ def plot_result(
 
     if 'summary' in step_set:
         summarize_metrics_from_csv(
-            experiment_name=experiment_name,
+            output_name=output_name,
             model_names=model_names,
         )
 
     if 'barplots' in step_set:
         plot_metrics_from_csv(
-            experiment_name=experiment_name,
+            output_name=output_name,
             model_names=model_names,
             data_file=data_file,
         )
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Across-patient result plotting and summary.')
+    parser = argparse.ArgumentParser(description='Across-cell-type result plotting and summary.')
     parser.add_argument('--query_key', type=str, default='all')
     parser.add_argument('--seed', type=str, default='all')
     parser.add_argument(
@@ -2221,6 +2356,24 @@ if __name__ == '__main__':
         help='Comma-separated steps: umap,violin,metrics,summary,barplots. Use all to run all steps.',
     )
     parser.add_argument('--skip_missing', action='store_true')
+    
+    parser.add_argument(
+        '--models',
+        type=str,
+        default=','.join(DEFAULT_ABLATION_MODELS),
+        help=(
+            'Comma-separated model identifiers. '
+            'The identifiers must match the model field '
+            'in the prediction h5ad filenames.'
+        ),
+    )
+
+    parser.add_argument(
+        '--output_name',
+        type=str,
+        default='across_cell_types_ablation',
+    )
+
     args = parser.parse_args()
 
     if args.seed == 'all':
@@ -2228,7 +2381,16 @@ if __name__ == '__main__':
     else:
         selected_seeds = tuple(int(s.strip()) for s in args.seed.split(',') if s.strip())
 
+    selected_models = tuple(
+        model_name.strip()
+        for model_name in args.models.split(',')
+        if model_name.strip()
+    )
+
     plot_result(
+        experiment_name='across_cell_types',
+        output_name=args.output_name,
+        model_names=selected_models,
         query_key=args.query_key,
         seeds=selected_seeds,
         steps=args.steps,

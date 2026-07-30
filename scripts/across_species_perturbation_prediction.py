@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import random
 import wandb
 import argparse
@@ -124,23 +124,26 @@ def predict_perturbation(
     print(train)
 
     set_seed(seed)
-    model = EGD_model(train)
-    model.train(
-        max_epochs = 400,
-        batch_size = 32,
-        early_stopping = True,
-        early_stopping_patience = 25,
-        enable_progress_bar = False,
-        callbacks = [EpochProgressPrinter()],
-        datasplitter_kwargs = {'random_state': split_seed},
-        wandb_project = f'{experiment_name}_{model_name}_{query_key}_seed{seed}',
-        experiment_name = f'{experiment_name}_{model_name}_{query_key}_seed{seed}',
-    )
-    wandb.finish()
+    # model = EGD_model(train)
+    # model.train(
+    #     max_epochs = 400,
+    #     batch_size = 32,
+    #     early_stopping = True,
+    #     early_stopping_patience = 25,
+    #     enable_progress_bar = False,
+    #     callbacks = [EpochProgressPrinter()],
+    #     datasplitter_kwargs = {
+    #         'random_state': split_seed,
+    #         # 'stratify_keys': [cond_key, cell_label_key, sub_key],
+    #     },
+    #     wandb_project = f'{experiment_name}_{model_name}_{query_key}_seed{seed}',
+    #     experiment_name = f'{experiment_name}_{model_name}_{query_key}_seed{seed}',
+    # )
+    # wandb.finish()
 
     model_path = f'../model_trained/{experiment_name}/EGD_model_trained_on_{data_file}_{query_key}_seed{seed}.model'
-    model.save(model_path, overwrite = True, save_anndata = True)
-    # model = EGD_model.load(model_path)
+    # model.save(model_path, overwrite = True, save_anndata = True)
+    model = EGD_model.load(model_path)
 
     adata_query_ctrl = adata[((adata.obs[cell_label_key] == query_key) & (adata.obs[cond_key] == ctrl_key))].copy()
     adata_query_stim = adata[((adata.obs[cell_label_key] == query_key) & (adata.obs[cond_key] == stim_key))].copy()
@@ -176,7 +179,7 @@ def predict_perturbation(
                 ctrl_key = ctrl_key,
                 stim_key = stim_key,
                 query_key = query_key,
-                sub_key=sub_key,
+                sub_key = sub_key,
             )
 
         adata_query_pred.obs[cond_key] = 'pred'

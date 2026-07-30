@@ -15,7 +15,9 @@ from matplotlib import pyplot as plt
 from lightning import pytorch as pl
 from scpilot.egd_model import EGD_model
 
-parser = argparse.ArgumentParser(description = 'across_cell_types_perturbation_prediction')
+parser = argparse.ArgumentParser(
+    description='across_cell_types_perturbation_prediction_w_o_discriminator'
+)
 parser.add_argument(
     '--query_key',
     type = str,
@@ -93,7 +95,7 @@ def compute_mmd_loss(lhs, rhs, gammas):
 
 def predict_perturbation(
     experiment_name = 'across_cell_types',
-    model_name = 'scPILOT',
+    model_name = 'scPILOT_w_o_discriminator',
     data_file = 'pbmc',
     file_type = '.h5ad',
     cond_key = 'condition',
@@ -123,22 +125,50 @@ def predict_perturbation(
     print(train)
 
     set_seed(seed)
-    # model = EGD_model(train)
-    # model.train(
-    #     max_epochs = 400,
-    #     batch_size = 32,
-    #     early_stopping = True,
-    #     early_stopping_patience = 25,
-    #     enable_progress_bar = False,
-    #     callbacks = [EpochProgressPrinter()],
-    #     datasplitter_kwargs = {'random_state': split_seed},
-    #     wandb_project = f'{experiment_name}_{model_name}_{query_key}_seed{seed}',
-    #     experiment_name = f'{experiment_name}_{model_name}_{query_key}_seed{seed}',
+
+    # model = EGD_model(
+    #     train,
+    #     use_discriminator=False,
     # )
+
+    # print('use_discriminator:', model.module.use_discriminator)
+    # print('discriminator:', model.module.discriminator)
+
+    # assert model.module.use_discriminator is False
+    # assert model.module.discriminator is None
+
+    # model.train(
+    #     max_epochs=400,
+    #     batch_size=32,
+    #     early_stopping=True,
+    #     early_stopping_patience=25,
+    #     enable_progress_bar=False,
+    #     callbacks=[EpochProgressPrinter()],
+    #     datasplitter_kwargs={
+    #         'random_state': split_seed,
+    #     },
+    #     wandb_project=(
+    #         f'{experiment_name}_{model_name}_{query_key}_seed{seed}'
+    #     ),
+    #     experiment_name=(
+    #         f'{experiment_name}_{model_name}_{query_key}_seed{seed}'
+    #     ),
+    # )
+
     # wandb.finish()
 
-    model_path = f'../model_trained/{experiment_name}/EGD_model_trained_on_{data_file}_{query_key}_seed{seed}.model'
-    # model.save(model_path, overwrite = True, save_anndata = True)
+    model_path = (
+        f'../model_trained/{experiment_name}/'
+        f'EGD_model_w_o_discriminator_trained_on_'
+        f'{data_file}_{query_key}_seed{seed}.model'
+    )
+
+    # model.save(
+    #     model_path,
+    #     overwrite=True,
+    #     save_anndata=True,
+    # )
+
     model = EGD_model.load(model_path)
 
     adata_query_ctrl = adata[((adata.obs[cell_label_key] == query_key) & (adata.obs[cond_key] == ctrl_key))].copy()
@@ -155,74 +185,67 @@ def predict_perturbation(
     gammas = np.logspace(1, -3, num = 50)
     metric_records = []
 
-    for ot_flag in range(2):
-        # Reset the RNG before inference to make prediction deterministic for this run.
-        set_seed(seed)
-        if ot_flag == 0:
-            eval_model_name = 'VAEGAN'
-            adata_query_pred, _ = model.predict(
-                cell_label_key = cell_label_key,
-                cond_key = cond_key,
-                ctrl_key = ctrl_key,
-                stim_key = stim_key,
-                query_key = query_key,
-            )
-        else:
-            eval_model_name = model_name
-            adata_query_pred, _ = model.predict_new(
-                cell_label_key = cell_label_key,
-                cond_key = cond_key,
-                ctrl_key = ctrl_key,
-                stim_key = stim_key,
-                query_key = query_key,
-            )
+    set_seed(seed)
 
-        adata_query_pred.obs[cond_key] = 'pred'
-        adata_query_eval = ad.concat([adata_query_stim, adata_query_pred])
-        plt.figure()
-        r2mean_all, r2mean_top50 = EGD_model.reg_mean_plot(
-            adata_query_eval,
-            cond_key=cond_key,
-            axis_keys={'x': 'pred', 'y': stim_key},
-            labels={'x': 'Prediction', 'y': 'Ground truth'},
-            path_to_save=f'../Figures/{experiment_name}/{eval_model_name}_{data_file}_reg_mean_{query_key}_seed{seed}.jpg',
-            gene_list=top50_genes[:10],
-            show=False,
-            top_genes=top50_genes,
-            top_gene_label='T50',
-            legend=False,
-        )
+    eval_model_name = model_name
 
-        x = to_dense_array(adata_query_pred[:, top50_genes].X)
-        y = to_dense_array(adata_query_stim[:, top50_genes].X)
-        mmd = compute_mmd_loss(x, y, gammas = gammas)
+    adata_query_pred, _ = model.predict_new(
+        cell_label_key=cell_label_key,
+        cond_key=cond_key,
+        ctrl_key=ctrl_key,
+        stim_key=stim_key,
+        query_key=query_key,
+    )
 
-        print(f'{eval_model_name}:')
-        print(f'{query_key}: r2mean_all = {r2mean_all}')
-        print(f'{query_key}: r2mean_top50 = {r2mean_top50}')
-        print(f'{query_key}: mmd = {mmd}')
+    adata_query_pred.obs[cond_key] = 'pred'
+    adata_query_eval = ad.concat([adata_query_stim, adata_query_pred])
+    plt.figure()
+    r2mean_all, r2mean_top50 = EGD_model.reg_mean_plot(
+        adata_query_eval,
+        cond_key=cond_key,
+        axis_keys={'x': 'pred', 'y': stim_key},
+        labels={'x': 'Prediction', 'y': 'Ground truth'},
+        path_to_save=f'../Figures/{experiment_name}/{eval_model_name}_{data_file}_reg_mean_{query_key}_seed{seed}.jpg',
+        gene_list=top50_genes[:10],
+        show=False,
+        top_genes=top50_genes,
+        top_gene_label='T50',
+        legend=False,
+    )
 
-        metric_records.append({
-            'experiment': experiment_name,
-            'data_file': data_file,
-            'query_key': query_key,
-            'seed': seed,
-            'split_seed': split_seed,
-            'model': eval_model_name,
-            'r2mean_all': r2mean_all,
-            'r2mean_top50': r2mean_top50,
-            'mmd_top50': mmd,
-        })
+    x = to_dense_array(adata_query_pred[:, top50_genes].X)
+    y = to_dense_array(adata_query_stim[:, top50_genes].X)
+    mmd = compute_mmd_loss(x, y, gammas = gammas)
 
-        adata_query_eval_to_save = ad.concat([adata_query_ctrl, adata_query_eval])
-        adata_query_eval_to_save.write_h5ad(
-            f'../Result_anndata/{experiment_name}/{experiment_name}_{eval_model_name}_{data_file}_{query_key}_seed{seed}{file_type}'
-        )
+    print(f'{eval_model_name}:')
+    print(f'{query_key}: r2mean_all = {r2mean_all}')
+    print(f'{query_key}: r2mean_top50 = {r2mean_top50}')
+    print(f'{query_key}: mmd = {mmd}')
+
+    metric_records.append({
+        'experiment': experiment_name,
+        'data_file': data_file,
+        'query_key': query_key,
+        'seed': seed,
+        'split_seed': split_seed,
+        'model': eval_model_name,
+        'r2mean_all': r2mean_all,
+        'r2mean_top50': r2mean_top50,
+        'mmd_top50': mmd,
+    })
+
+    adata_query_eval_to_save = ad.concat([adata_query_ctrl, adata_query_eval])
+    adata_query_eval_to_save.write_h5ad(
+        f'../Result_anndata/{experiment_name}/{experiment_name}_{eval_model_name}_{data_file}_{query_key}_seed{seed}{file_type}'
+    )
 
     metrics_df = pd.DataFrame(metric_records)
+
     metrics_df.to_csv(
-        f'../DataFrames/{experiment_name}/{experiment_name}_{data_file}_{query_key}_seed{seed}_metrics.csv',
-        index = False,
+        f'../DataFrames/{experiment_name}/'
+        f'{experiment_name}_{data_file}_{query_key}_'
+        f'seed{seed}_{model_name}_metrics.csv',
+        index=False,
     )
 
 

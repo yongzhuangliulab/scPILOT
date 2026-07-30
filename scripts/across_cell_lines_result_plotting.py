@@ -441,7 +441,7 @@ def summarize_recovery_gene_level(gene_df, experiment_name, model_names):
         index=False,
     )
 
-    # Paired two-sided Wilcoxon on seven query-level seed averages.
+    # Paired two-sided Wilcoxon on six query-level seed averages.
     wilcoxon_records = []
     baselines = [m for m in model_names if m != 'scPILOT']
     for metric in metric_cols:
@@ -1950,7 +1950,7 @@ def plot_metrics_from_csv(
     metric_labels = {
         'r2mean_all': r'$R^2_{\mathrm{mean}}$ (↑; all genes)',
         'r2mean_top50': r'$R^2_{\mathrm{mean}}$ (↑; top 50 DEGs)',
-        'mmd_top50': r'$\mathrm{MMD}$ (↓; top 50 DEGs)',
+        'mmd_top50': r'$\mathrm{MMD}^2$ (↓)',
 
         'l2mean_all': r'$L^2_{\mathrm{mean}}$ (↓; all genes)',
         'l2mean_top50': r'$L^2_{\mathrm{mean}}$ (↓; top 50 DEGs)',

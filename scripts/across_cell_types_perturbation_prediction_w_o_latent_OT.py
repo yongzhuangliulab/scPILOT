@@ -93,7 +93,7 @@ def compute_mmd_loss(lhs, rhs, gammas):
 
 def predict_perturbation(
     experiment_name = 'across_cell_types',
-    model_name = 'scPILOT',
+    model_name = 'scPILOT_w_o_latent_OT',
     data_file = 'pbmc',
     file_type = '.h5ad',
     cond_key = 'condition',
@@ -155,7 +155,7 @@ def predict_perturbation(
     gammas = np.logspace(1, -3, num = 50)
     metric_records = []
 
-    for ot_flag in range(2):
+    for ot_flag in [1]:
         # Reset the RNG before inference to make prediction deterministic for this run.
         set_seed(seed)
         if ot_flag == 0:
@@ -170,11 +170,12 @@ def predict_perturbation(
         else:
             eval_model_name = model_name
             adata_query_pred, _ = model.predict_new(
-                cell_label_key = cell_label_key,
-                cond_key = cond_key,
-                ctrl_key = ctrl_key,
-                stim_key = stim_key,
-                query_key = query_key,
+                cell_label_key=cell_label_key,
+                cond_key=cond_key,
+                ctrl_key=ctrl_key,
+                stim_key=stim_key,
+                query_key=query_key,
+                use_latent_ot=False,
             )
 
         adata_query_pred.obs[cond_key] = 'pred'
@@ -221,8 +222,10 @@ def predict_perturbation(
 
     metrics_df = pd.DataFrame(metric_records)
     metrics_df.to_csv(
-        f'../DataFrames/{experiment_name}/{experiment_name}_{data_file}_{query_key}_seed{seed}_metrics.csv',
-        index = False,
+        f'../DataFrames/{experiment_name}/'
+        f'{experiment_name}_{data_file}_{query_key}_seed{seed}_'
+        f'{model_name}_metrics.csv',
+        index=False,
     )
 
 

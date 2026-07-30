@@ -71,6 +71,13 @@ def model_marker_size(model_name: str, base_size: float = 4.0) -> float:
     return size_map.get(model_name, base_size)
 
 
+def condition_display_name(condition: str) -> str:
+    condition = str(condition)
+    if condition.upper() == condition:
+        return condition
+    return condition.capitalize()
+
+
 def default_model_order(model_names):
     ordered = ['identity', 'scGen', 'biolord', 'CellOT', 'VAEGAN', 'scPILOT']
     return [m for m in ordered if m in model_names]
@@ -504,8 +511,8 @@ def plot_stacked_violins_and_recovery_from_h5ad(
     query_keys = query_keys or sorted(adata.obs[cell_label_key].unique().tolist())
 
     groupby_order = [
-        ctrl_key.capitalize(),
-        stim_key.capitalize(),
+        condition_display_name(ctrl_key),
+        condition_display_name(stim_key),
         *[model_display_name(m) for m in model_order],
     ]
 
@@ -555,8 +562,12 @@ def plot_stacked_violins_and_recovery_from_h5ad(
 
                     adata_ctrl_plot = adata_ctrl_ref.copy()
                     adata_stim_plot = adata_stim_ref.copy()
-                    adata_ctrl_plot.obs[plot_group_key] = ctrl_key.capitalize()
-                    adata_stim_plot.obs[plot_group_key] = stim_key.capitalize()
+                    adata_ctrl_plot.obs[plot_group_key] = condition_display_name(
+                        ctrl_key
+                    )
+                    adata_stim_plot.obs[plot_group_key] = condition_display_name(
+                        stim_key
+                    )
                     adata_ctrl_plot.obs_names = [
                         f'{idx}_ctrl_seed{seed}' for idx in adata_ctrl_plot.obs_names.astype(str)
                     ]
@@ -1943,7 +1954,7 @@ def plot_metrics_from_csv(
     metric_labels = {
         'r2mean_all': r'$R^2_{\mathrm{mean}}$ (↑; all genes)',
         'r2mean_top50': r'$R^2_{\mathrm{mean}}$ (↑; top 50 DEGs)',
-        'mmd_top50': r'$\mathrm{MMD}$ (↓; top 50 DEGs)',
+        'mmd_top50': r'$\mathrm{MMD}^2$ (↓)',
 
         'l2mean_all': r'$L^2_{\mathrm{mean}}$ (↓; all genes)',
         'l2mean_top50': r'$L^2_{\mathrm{mean}}$ (↓; top 50 DEGs)',
